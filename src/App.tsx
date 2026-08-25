@@ -75,6 +75,7 @@ export default function App() {
   const [draftDocument, setDraftDocument] = useState<CsvDocument | null>(null);
   const [draftMappings, setDraftMappings] = useState<[string, string][]>([]);
   const [dataDirty, setDataDirty] = useState(false);
+  const [dataSearch, setDataSearch] = useState('');
   const [newChestName, setNewChestName] = useState('');
   const [humanSearch, setHumanSearch] = useState('');
   const [achievableOnly, setAchievableOnly] = useState(false);
@@ -112,6 +113,7 @@ export default function App() {
       setDraftDocument(cloneDocument(catalogues[dataKind]));
     }
     setDataDirty(false);
+    setDataSearch('');
   }, [dataKind, catalogues, assetMappings]);
 
   useEffect(() => {
@@ -203,6 +205,17 @@ export default function App() {
 
   function updateMapping(rowIndex: number, columnIndex: 0 | 1, value: string) {
     setDraftMappings((current) => current.map((row, index) => index === rowIndex ? row.map((cell, column) => column === columnIndex ? value : cell) as [string, string] : row));
+    setDataDirty(true);
+  }
+
+  function addCatalogueRow() {
+    setDraftDocument((current) => current ? { ...current, rows: [...current.rows, current.headers.map(() => '')] } : current);
+    setDataSearch('');
+    setDataDirty(true);
+  }
+
+  function removeCatalogueRow(rowIndex: number) {
+    setDraftDocument((current) => current ? { ...current, rows: current.rows.filter((_, index) => index !== rowIndex) } : current);
     setDataDirty(true);
   }
 
@@ -310,6 +323,39 @@ export default function App() {
     return matchesSearch && (!achievableOnly || human.achievable);
   }), [assessments, humanSearch, achievableOnly]);
 
+  const normalizedDataSearch = dataSearch.trim().toLowerCase();
+  const visibleMappingRows = useMemo(() => draftMappings
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => !normalizedDataSearch || row.some((cell) => cell.toLowerCase().includes(normalizedDataSearch))),
+  [draftMappings, normalizedDataSearch]);
+  const visibleCatalogueRows = useMemo(() => (draftDocument?.rows ?? [])
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => !normalizedDataSearch || row.some((cell) => cell.toLowerCase().includes(normalizedDataSearch))),
+  [draftDocument, normalizedDataSearch]);
+
+  const unresolvedDiagnostics = useMemo(() => (inventoryReport?.unresolvedAssets ?? []).map((assetName) => {
+    const sources = (inventoryReport?.sources ?? []).map((source) => {
+      const matchingItems = source.items.filter((item) => item.assetName === assetName);
+      return {
+        id: source.id,
+        label: source.label,
+        kind: source.kind,
+        quantity: matchingItems.reduce((sum, item) => sum + item.quantity, 0),
+        entries: matchingItems.length,
+      };
+    }).filter((source) => source.quantity > 0);
+    const itemType = assetName.startsWith('DA_Food_') ? 'Food' : assetName.startsWith('DA_Memory_') ? 'Memory' : 'Unknown type';
+    const nameHint = assetName.replace(/^DA_(?:Food|Memory)_/, '').replace(/[_-]+/g, ' ').trim();
+    return {
+      assetName,
+      itemType,
+      nameHint,
+      sources,
+      quantity: sources.reduce((sum, source) => sum + source.quantity, 0),
+      entries: sources.reduce((sum, source) => sum + source.entries, 0),
+    };
+  }), [inventoryReport]);
+
   const selectedAssessment = assessments.find((human) => human.profession === selectedProfession);
   const inventoryUnits = Object.values(workingInventory).reduce((sum, quantity) => sum + quantity, 0);
 
@@ -415,7 +461,31 @@ export default function App() {
                   ))}
                 </div>
               ) : <div className="empty-state"><PackageOpen size={34} /><strong>No inventory loaded</strong><span>Select and refresh a save to import the player backpack.</span></div>}
-              {!!inventoryReport?.unresolvedAssets.length && <div className="warning-box"><CircleAlert size={18} /><div><strong>Unresolved game assets</strong><span>{inventoryReport.unresolvedAssets.join(', ')}. Assign only verified catalogue names; the calculator ignores unresolved quantities.</span><button className="button ghost" onClick={() => { setView('data'); setDataKind('mappings'); }}>Edit asset aliases</button></div></div>}
+              {!!unresolvedDiagnostics.length && (
+                <div className="unresolved-box">
+                  <div className="unresolved-heading">
+                    <CircleAlert size={18} />
+                    <div><strong>Unresolved game assets</strong><span>These quantities are excluded from the calculator until each asset is assigned to a verified catalogue item.</span></div>
+                    <button className="button ghost" onClick={() => { setView('data'); setDataKind('mappings'); }}>Edit asset aliases</button>
+                  </div>
+                  <div className="unresolved-list">
+                    {unresolvedDiagnostics.map((diagnostic) => (
+                      <article className="unresolved-item" key={diagnostic.assetName}>
+                        <div className="unresolved-asset"><code>{diagnostic.assetName}</code><span>{diagnostic.itemType}</span></div>
+                        <div className="unresolved-metrics">
+                          <div><strong>{diagnostic.quantity}</strong><span>items found</span></div>
+                          <div><strong>{diagnostic.sources.length}</strong><span>sources</span></div>
+                          <div><strong>{diagnostic.entries}</strong><span>save entries</span></div>
+                        </div>
+                        <div className="unresolved-hint"><span>Name hint</span><strong>{diagnostic.nameHint || 'No readable hint'}</strong></div>
+                        <div className="unresolved-sources">
+                          {diagnostic.sources.map((source) => <span key={source.id}>{source.kind === 'backpack' ? 'Backpack' : source.label}: <strong>{source.quantity}</strong></span>)}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
               {!!inventoryReport?.sources.length && <div className="source-strip">{inventoryReport.sources.map((source) => <div key={source.id}><span>{source.kind === 'backpack' ? 'BACKPACK' : 'PLAYER CHEST'}</span><strong>{source.label}</strong><em>{source.items.reduce((sum, item) => sum + item.quantity, 0)} units</em></div>)}</div>}
             </section>
           </div>
@@ -434,24 +504,28 @@ export default function App() {
                 <button className="button primary" disabled={!dataDirty || !!busy} onClick={saveDataChanges}><Save size={16} /> Save changes</button>
               </div>
             </div>
-            <div className="data-intro"><div><span className="section-index">DATA</span><h2>{dataKind === 'mappings' ? 'asset-mappings.json' : draftDocument?.fileName}</h2><p>{dataKind === 'mappings' ? 'Each asset must map to an existing item of the correct type. Ambiguous aliases should remain absent until verified.' : 'Every save validates columns, numbers, duplicate names and creates a backup.'}</p></div><span className={`dirty-badge ${dataDirty ? 'dirty' : ''}`}>{dataDirty ? 'Unsaved edits' : 'File synchronized'}</span></div>
+            <div className="data-intro"><div><span className="section-index">DATA</span><h2>{dataKind === 'mappings' ? 'asset-mappings.json' : draftDocument?.fileName}</h2><p>{dataKind === 'mappings' ? 'Each asset must map to an existing item of the correct type. Ambiguous aliases should remain absent until verified.' : 'Edit, add or remove entries here. Every save validates columns, numbers and duplicate names, then creates a backup.'}</p></div><span className={`dirty-badge ${dataDirty ? 'dirty' : ''}`}>{dataDirty ? 'Unsaved edits' : 'File synchronized'}</span></div>
+            <div className="data-filter-row">
+              <label className="data-search"><Search size={15} /><input value={dataSearch} onChange={(event) => setDataSearch(event.target.value)} placeholder={`Search ${dataKind} entries`} /></label>
+              <span>{dataKind === 'mappings' ? visibleMappingRows.length : visibleCatalogueRows.length} / {dataKind === 'mappings' ? draftMappings.length : draftDocument?.rows.length ?? 0} entries</span>
+            </div>
             <div className="table-scroll">
               {dataKind === 'mappings' ? (
                 <table className="data-table mapping-table">
                   <thead><tr><th>Game asset</th><th>Catalogue item</th><th /></tr></thead>
-                  <tbody>{draftMappings.map(([asset, target], rowIndex) => {
+                  <tbody>{visibleMappingRows.map(({ row: [asset, target], index: rowIndex }) => {
                     const options = (asset.startsWith('DA_Food_') ? catalogues.food : catalogues.memories).rows.map((row) => row[0]);
-                    return <tr key={`${asset}-${rowIndex}`}><td><input aria-label={`Game asset row ${rowIndex + 1}`} value={asset} onChange={(event) => updateMapping(rowIndex, 0, event.target.value)} placeholder="DA_Memory_…" /></td><td><select aria-label={`Catalogue item row ${rowIndex + 1}`} value={target} onChange={(event) => updateMapping(rowIndex, 1, event.target.value)}><option value="">Select a verified item…</option>{options.map((name) => <option key={name}>{name}</option>)}</select></td><td><button className="icon-button" aria-label={`Remove mapping ${asset}`} onClick={() => { setDraftMappings((current) => current.filter((_, index) => index !== rowIndex)); setDataDirty(true); }}><Trash2 size={15} /></button></td></tr>;
-                  })}</tbody>
+                    return <tr key={rowIndex}><td><input aria-label={`Game asset row ${rowIndex + 1}`} value={asset} onChange={(event) => updateMapping(rowIndex, 0, event.target.value)} placeholder="DA_Memory_…" /></td><td><select aria-label={`Catalogue item row ${rowIndex + 1}`} value={target} onChange={(event) => updateMapping(rowIndex, 1, event.target.value)}><option value="">Select a verified item…</option>{options.map((name) => <option key={name}>{name}</option>)}</select></td><td><button className="icon-button" aria-label={`Remove mapping ${asset}`} onClick={() => { setDraftMappings((current) => current.filter((_, index) => index !== rowIndex)); setDataDirty(true); }}><Trash2 size={15} /></button></td></tr>;
+                  })}{visibleMappingRows.length === 0 && <tr><td className="no-data-results" colSpan={3}>No mappings match “{dataSearch}”.</td></tr>}</tbody>
                 </table>
               ) : draftDocument && (
-                <table className="data-table">
-                  <thead><tr>{draftDocument.headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
-                  <tbody>{draftDocument.rows.map((row, rowIndex) => <tr key={`${row[0]}-${rowIndex}`}>{row.map((cell, columnIndex) => <td key={draftDocument.headers[columnIndex]}><input aria-label={`${draftDocument.headers[columnIndex]} row ${rowIndex + 1}`} value={cell} onChange={(event) => updateCell(rowIndex, columnIndex, event.target.value)} /></td>)}</tr>)}</tbody>
+                <table className="data-table catalogue-table">
+                  <thead><tr>{draftDocument.headers.map((header) => <th key={header}>{header}</th>)}<th /></tr></thead>
+                  <tbody>{visibleCatalogueRows.map(({ row, index: rowIndex }) => <tr key={rowIndex}>{row.map((cell, columnIndex) => <td key={draftDocument.headers[columnIndex]}><input aria-label={`${draftDocument.headers[columnIndex]} row ${rowIndex + 1}`} value={cell} onChange={(event) => updateCell(rowIndex, columnIndex, event.target.value)} /></td>)}<td><button className="icon-button" aria-label={`Remove ${dataKind} row ${rowIndex + 1}`} onClick={() => removeCatalogueRow(rowIndex)}><Trash2 size={15} /></button></td></tr>)}{visibleCatalogueRows.length === 0 && <tr><td className="no-data-results" colSpan={draftDocument.headers.length + 1}>No {dataKind} entries match “{dataSearch}”.</td></tr>}</tbody>
                 </table>
               )}
             </div>
-            {dataKind === 'mappings' && <button className="button secondary add-mapping" onClick={() => { setDraftMappings((current) => [...current, ['', '']]); setDataDirty(true); }}><Plus size={16} /> Add asset mapping</button>}
+            <button className="button secondary add-data-row" onClick={dataKind === 'mappings' ? () => { setDraftMappings((current) => [...current, ['', '']]); setDataSearch(''); setDataDirty(true); } : addCatalogueRow}><Plus size={16} /> Add {dataKind === 'mappings' ? 'asset mapping' : dataKind === 'memories' ? 'memory' : dataKind === 'humans' ? 'human' : 'food'} entry</button>
           </section>
         )}
 

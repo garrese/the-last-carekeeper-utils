@@ -44,7 +44,7 @@ struct ActorRecord {
     actor_name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct RawItem {
     asset_name: String,
     quantity: u32,
@@ -284,7 +284,7 @@ fn find_actor_records(raw: &[u8]) -> Vec<ActorRecord> {
     records
 }
 
-fn scan_items(raw: &[u8], start: usize, end: usize) -> (Vec<RawItem>, bool) {
+fn scan_items(raw: &[u8], start: usize, end: usize) -> Vec<RawItem> {
     let asset_marker = fstring_pattern("AssetName");
     let count_marker = fstring_pattern("ItemCount");
     let asset_offsets = find_all(raw, &asset_marker, start, end);
@@ -317,18 +317,33 @@ fn scan_items(raw: &[u8], start: usize, end: usize) -> (Vec<RawItem>, bool) {
         });
     }
 
+    items
+}
+
+fn deduplicate_exact_full_mirror(items: &mut Vec<RawItem>) -> bool {
     let mirrored = items.len() >= 2
-        && items.len() % 2 == 0
-        && items[..items.len() / 2]
-            .iter()
-            .zip(items[items.len() / 2..].iter())
-            .all(|(left, right)| {
-                left.asset_name == right.asset_name && left.quantity == right.quantity
-            });
+        && items.len().is_multiple_of(2)
+        && items[..items.len() / 2] == items[items.len() / 2..];
     if mirrored {
         items.truncate(items.len() / 2);
     }
-    (items, mirrored)
+    mirrored
+}
+
+fn find_backpack_section_start(raw: &[u8], start: usize, end: usize) -> Option<usize> {
+    let inventory_table =
+        fstring_pattern("/Game/LocalizationStringTables/ST_Inventory.ST_Inventory");
+    let backpack = fstring_pattern("Backpack");
+    let items = fstring_pattern("Items");
+
+    find_all(raw, &backpack, start, end)
+        .into_iter()
+        .find(|offset| {
+            let context_start = offset.saturating_sub(1024).max(start);
+            let context_end = offset.saturating_add(4096).min(end);
+            !find_all(raw, &inventory_table, context_start, *offset).is_empty()
+                && !find_all(raw, &items, *offset, context_end).is_empty()
+        })
 }
 
 fn find_chest_label(raw: &[u8], start: usize, end: usize) -> Option<String> {
@@ -357,8 +372,20 @@ fn parse_sources(raw: &[u8]) -> Result<(Vec<ParsedSource>, Vec<String>), String>
             || actor.class_path == PLAYER_BOX_CLASS
             || actor.class_path == PLAYER_BOX_SMALL_CLASS
     }) {
-        let (items, mirrored) = scan_items(raw, actor.offset, actor.end);
         if actor.class_path == CHARACTER_CLASS {
+            let items = if let Some(backpack_start) =
+                find_backpack_section_start(raw, actor.offset, actor.end)
+            {
+                scan_items(raw, backpack_start, actor.end)
+            } else {
+                warnings.push(
+                    "The canonical Backpack section was not found; the character actor was scanned as a compatibility fallback."
+                        .to_string(),
+                );
+                let mut fallback = scan_items(raw, actor.offset, actor.end);
+                deduplicate_exact_full_mirror(&mut fallback);
+                fallback
+            };
             sources.push(ParsedSource {
                 id: format!("backpack:{}", actor.actor_name),
                 label: "Player backpack".to_string(),
@@ -367,6 +394,8 @@ fn parse_sources(raw: &[u8]) -> Result<(Vec<ParsedSource>, Vec<String>), String>
             });
             continue;
         }
+        let mut items = scan_items(raw, actor.offset, actor.end);
+        let mirrored = deduplicate_exact_full_mirror(&mut items);
         let custom_name = find_chest_label(raw, actor.offset, actor.end);
         if !items.is_empty() && !mirrored {
             warnings.push(format!(
@@ -600,12 +629,44 @@ mod tests {
         ];
         let mut all = left.clone();
         all.extend(left.clone());
-        let mirrored = all.len() % 2 == 0
-            && all[..all.len() / 2]
-                .iter()
-                .zip(all[all.len() / 2..].iter())
-                .all(|(a, b)| a.asset_name == b.asset_name && a.quantity == b.quantity);
-        assert!(mirrored);
+        assert!(deduplicate_exact_full_mirror(&mut all));
+        assert_eq!(all, left);
+    }
+
+    #[test]
+    fn non_mirrored_items_are_preserved() {
+        let mut items = vec![
+            RawItem {
+                asset_name: "A".into(),
+                quantity: 2,
+            },
+            RawItem {
+                asset_name: "A".into(),
+                quantity: 1,
+            },
+        ];
+        let original = items.clone();
+        assert!(!deduplicate_exact_full_mirror(&mut items));
+        assert_eq!(items, original);
+    }
+
+    #[test]
+    fn canonical_backpack_section_requires_inventory_context() {
+        let mut raw = fstring_pattern("Backpack");
+        raw.extend_from_slice(&[0; 32]);
+        let inventory_offset = raw.len();
+        raw.extend_from_slice(&fstring_pattern(
+            "/Game/LocalizationStringTables/ST_Inventory.ST_Inventory",
+        ));
+        let expected = raw.len();
+        raw.extend_from_slice(&fstring_pattern("Backpack"));
+        raw.extend_from_slice(&fstring_pattern("Items"));
+
+        assert!(inventory_offset < expected);
+        assert_eq!(
+            find_backpack_section_start(&raw, 0, raw.len()),
+            Some(expected)
+        );
     }
 
     #[test]
@@ -672,5 +733,33 @@ mod tests {
                 .iter()
                 .any(|source| source.label == "PruebaItems001")
         );
+    }
+
+    #[test]
+    fn moved_memories_are_counted_once_when_current_save_is_available() {
+        let Some(path) = std::env::var_os("TLC_BACKPACK_MIRROR_SAVE")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_file())
+        else {
+            return;
+        };
+        let compressed = fs::read(path).unwrap();
+        let (raw, _) = decompress_save(&compressed).unwrap();
+        let (sources, warnings) = parse_sources(&raw).unwrap();
+        let backpack = sources
+            .iter()
+            .find(|source| source.kind == "backpack")
+            .unwrap();
+        let backpack_items = backpack
+            .items
+            .iter()
+            .map(|item| (item.asset_name.as_str(), item.quantity))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(backpack_items.get("DA_Memory_Drawings_Notes"), Some(&1));
+        assert_eq!(backpack_items.get("DA_Memory_Drawings_Cards"), Some(&2));
+        assert_eq!(backpack_items.get("DA_Food_High-FatEnergy"), Some(&1));
+        assert_eq!(backpack_items.len(), 15);
+        assert!(!warnings.iter().any(|warning| warning.contains("fallback")));
     }
 }

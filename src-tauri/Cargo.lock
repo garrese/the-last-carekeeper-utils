@@ -4120,8 +4120,10 @@ name = "the-last-carekeeper-utils"
 version = "0.1.4"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "csv",
  "flate2",
+ "png 0.17.16",
  "retoc",
  "serde",
  "serde_json",

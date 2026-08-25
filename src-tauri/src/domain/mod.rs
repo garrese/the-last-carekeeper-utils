@@ -135,6 +135,7 @@ pub struct SyncChange {
     pub can_apply: bool,
     pub reason: Option<String>,
     pub icon_asset: Option<String>,
+    pub icon_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

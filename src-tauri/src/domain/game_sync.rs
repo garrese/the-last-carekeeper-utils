@@ -4,6 +4,7 @@ use super::{
     CatalogueBundle, CsvDocument, GameSyncSource, SyncApplyResult, SyncChange, SyncProposal,
     SyncSection,
 };
+use base64::Engine as _;
 use retoc::asset_conversion::{self, FZenPackageContext};
 use retoc::legacy_asset::FLegacyPackageHeader;
 use retoc::logging::Log;
@@ -32,6 +33,7 @@ struct ExtractedItem {
     stats: BTreeMap<String, i32>,
     unsupported_stats: Vec<String>,
     icon_asset: Option<String>,
+    icon_data_url: Option<String>,
     is_development: bool,
 }
 
@@ -147,16 +149,19 @@ fn extract_catalogue(
     let store = iostore::open(paks_path, Arc::new(Config::default()))
         .map_err(|error| format!("Could not open installed game containers: {error:#}"))?;
     let package_count = store.packages().count();
-    let mut selected = Vec::<(FPackageId, String)>::new();
+    let mut packages_by_path = BTreeMap::<String, FPackageId>::new();
     for package in store.packages() {
         let chunk_id = FIoChunkId::from_package_id(package.id(), 0, EIoChunkType::ExportBundleData);
         let Some(path) = store.chunk_path(chunk_id) else {
             continue;
         };
-        if is_catalogue_package(&path) {
-            selected.push((package.id(), path));
-        }
+        packages_by_path.insert(path, package.id());
     }
+    let selected = packages_by_path
+        .iter()
+        .filter(|(path, _)| is_catalogue_package(path))
+        .map(|(path, id)| (*id, path.clone()))
+        .collect::<Vec<_>>();
     if selected.is_empty() {
         return Err(
             "The installed containers do not contain the expected Voyage growth assets."
@@ -222,6 +227,7 @@ fn extract_catalogue(
             }
         }
     }
+    extract_item_icons(&context, &packages_by_path, &mut items, &mut warnings);
     items.sort_by(|left, right| left.asset_name.cmp(&right.asset_name));
     humans.sort_by(|left, right| left.asset_name.cmp(&right.asset_name));
     Ok((items, humans, package_count, extracted_count, warnings))
@@ -289,7 +295,123 @@ fn parse_item(
         stats,
         unsupported_stats,
         icon_asset,
+        icon_data_url: None,
     })
+}
+
+fn extract_item_icons(
+    context: &FZenPackageContext,
+    packages_by_path: &BTreeMap<String, FPackageId>,
+    items: &mut [ExtractedItem],
+    warnings: &mut Vec<String>,
+) {
+    let icon_assets = items
+        .iter()
+        .filter_map(|item| item.icon_asset.clone())
+        .collect::<BTreeSet<_>>();
+    let writer = MemoryWriter::default();
+    let mut failed = 0_usize;
+    for icon_asset in &icon_assets {
+        let package_path = format!(
+            "../../../Voyage/Content{}.uasset",
+            icon_asset.strip_prefix("/Game").unwrap_or(icon_asset)
+        );
+        let Some(package_id) = packages_by_path.get(&package_path) else {
+            failed += 1;
+            continue;
+        };
+        let relative = package_path
+            .strip_prefix("../../../")
+            .unwrap_or(&package_path);
+        if asset_conversion::build_legacy(context, *package_id, UEPath::new(relative), &writer)
+            .is_err()
+        {
+            failed += 1;
+        }
+    }
+    let files = writer.take();
+    let thumbnails = icon_assets
+        .iter()
+        .filter_map(|asset| {
+            let stem = asset.rsplit('/').next()?;
+            let (_, uexp) = find_asset_pair(&files, stem)?;
+            decode_icon_thumbnail(uexp).map(|data_url| (asset.clone(), data_url))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for item in items {
+        item.icon_data_url = item
+            .icon_asset
+            .as_ref()
+            .and_then(|asset| thumbnails.get(asset))
+            .cloned();
+    }
+    let undecoded = icon_assets.len().saturating_sub(thumbnails.len());
+    if failed > 0 || undecoded > 0 {
+        warnings.push(format!(
+            "{} of {} referenced item icons could not be decoded as inline BGRA8 textures.",
+            failed.max(undecoded),
+            icon_assets.len()
+        ));
+    }
+}
+
+fn decode_icon_thumbnail(bytes: &[u8]) -> Option<String> {
+    const FORMAT: &[u8] = b"PF_B8G8R8A8\0";
+    let format_offset = bytes
+        .windows(FORMAT.len())
+        .position(|window| window == FORMAT)?;
+    let search_start = format_offset.saturating_sub(64);
+    let (width, height) = (search_start..format_offset.saturating_sub(7))
+        .rev()
+        .find_map(|offset| {
+            let width = u32::from_le_bytes(bytes.get(offset..offset + 4)?.try_into().ok()?);
+            let height = u32::from_le_bytes(bytes.get(offset + 4..offset + 8)?.try_into().ok()?);
+            (width == height && (16..=2048).contains(&width)).then_some((width, height))
+        })?;
+    let pixel_bytes = (width as usize)
+        .checked_mul(height as usize)?
+        .checked_mul(4)?;
+    let data_search_start = format_offset + FORMAT.len();
+    let data_search_end = (data_search_start + 128).min(bytes.len());
+    let data_offset = (data_search_start..data_search_end).find(|offset| {
+        let end = offset.saturating_add(pixel_bytes);
+        end + 8 <= bytes.len()
+            && bytes
+                .get(end..end + 4)
+                .is_some_and(|raw| raw == width.to_le_bytes())
+            && bytes
+                .get(end + 4..end + 8)
+                .is_some_and(|raw| raw == height.to_le_bytes())
+    })?;
+    let pixels = bytes.get(data_offset..data_offset + pixel_bytes)?;
+    let target_width = width.min(64);
+    let target_height = height.min(64);
+    let mut rgba = Vec::with_capacity(target_width as usize * target_height as usize * 4);
+    for target_y in 0..target_height {
+        let source_y = target_y * height / target_height;
+        for target_x in 0..target_width {
+            let source_x = target_x * width / target_width;
+            let source = ((source_y * width + source_x) * 4) as usize;
+            rgba.extend_from_slice(&[
+                pixels[source + 2],
+                pixels[source + 1],
+                pixels[source],
+                pixels[source + 3],
+            ]);
+        }
+    }
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, target_width, target_height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&rgba).ok()?;
+    }
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(encoded)
+    ))
 }
 
 fn parse_human(
@@ -643,6 +765,7 @@ fn compare_catalogues(
                     can_apply: item.unsupported_stats.is_empty(),
                     reason: unsupported_reason(&item.unsupported_stats),
                     icon_asset: item.icon_asset.clone(),
+                    icon_data_url: item.icon_data_url.clone(),
                 });
             }
         } else {
@@ -673,6 +796,7 @@ fn compare_catalogues(
                     })
                 }),
                 icon_asset: item.icon_asset.clone(),
+                icon_data_url: item.icon_data_url.clone(),
             });
         }
 
@@ -711,6 +835,7 @@ fn compare_catalogues(
                     can_apply: target_exists,
                     reason: (!target_exists).then(|| "Import or assign a compatible catalogue item first.".to_string()),
                     icon_asset: item.icon_asset.clone(),
+                    icon_data_url: item.icon_data_url.clone(),
                 });
             }
             Some(target) if local.is_none() => mapping_changes.push(SyncChange {
@@ -726,6 +851,7 @@ fn compare_catalogues(
                 can_apply: false,
                 reason: Some("Resolve the local catalogue target manually; the game name is not used to overwrite verified mappings.".to_string()),
                 icon_asset: item.icon_asset.clone(),
+                icon_data_url: item.icon_data_url.clone(),
             }),
             _ => {}
         }
@@ -761,6 +887,7 @@ fn compare_catalogues(
                     can_apply: human.unsupported_stats.is_empty(),
                     reason: unsupported_reason(&human.unsupported_stats),
                     icon_asset: None,
+                    icon_data_url: None,
                 });
             }
         } else {
@@ -781,6 +908,7 @@ fn compare_catalogues(
                     format!("Unsupported profession properties: {}.", human.unsupported_stats.join(", "))
                 }),
                 icon_asset: None,
+                icon_data_url: None,
             });
         }
     }
@@ -961,6 +1089,7 @@ fn missing_change(section: &str, name: &str, row: &[String]) -> SyncChange {
             "Missing entries are diagnostics only and are never auto-deleted.".to_string(),
         ),
         icon_asset: None,
+        icon_data_url: None,
     }
 }
 
@@ -1172,6 +1301,23 @@ mod tests {
     }
 
     #[test]
+    fn creates_png_thumbnail_from_inline_bgra8_texture() {
+        let width = 16_u32;
+        let mut bytes = vec![0; 8];
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(b"PF_B8G8R8A8\0");
+        bytes.extend_from_slice(&[0; 7]);
+        for _ in 0..width * width {
+            bytes.extend_from_slice(&[0x10, 0x20, 0x30, 0xff]);
+        }
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&width.to_le_bytes());
+        let data_url = decode_icon_thumbnail(&bytes).unwrap();
+        assert!(data_url.starts_with("data:image/png;base64,iVBOR"));
+    }
+
+    #[test]
     fn verified_mapping_wins_over_installed_display_name() {
         let food = document(
             "food",
@@ -1273,6 +1419,7 @@ mod tests {
             stats: BTreeMap::from([("Adaptability".to_string(), 10)]),
             unsupported_stats: Vec::new(),
             icon_asset: None,
+            icon_data_url: None,
             is_development: false,
         };
         let proposal = compare_catalogues(
@@ -1335,6 +1482,14 @@ mod tests {
         }
         assert!(proposal.source.extracted_count >= 80);
         assert_eq!(proposal.sections.len(), 4);
+        let decoded_icons = proposal
+            .sections
+            .iter()
+            .flat_map(|section| &section.changes)
+            .filter(|change| change.icon_data_url.is_some())
+            .count();
+        println!("decoded icons in proposal: {decoded_icons}");
+        assert!(decoded_icons >= 10);
         assert!(
             proposal
                 .sections

@@ -22,6 +22,7 @@ import {
   Trash2,
   Upload,
   UserRound,
+  X,
 } from 'lucide-react';
 import { api } from './api';
 import type {
@@ -32,13 +33,14 @@ import type {
   InventoryReport,
   RecipeResult,
   Settings,
+  SyncProposal,
 } from './types';
 
 type View = 'inventory' | 'data' | 'calculator';
 type CatalogueKind = keyof CatalogueBundle;
 type DataKind = CatalogueKind | 'mappings';
 
-const emptySettings: Settings = { savePath: null, chestNames: [] };
+const emptySettings: Settings = { savePath: null, chestNames: [], gamePath: null };
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -83,6 +85,9 @@ export default function App() {
   const [busy, setBusy] = useState('Starting local workspace…');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [syncProposal, setSyncProposal] = useState<SyncProposal | null>(null);
+  const [syncSection, setSyncSection] = useState<DataKind>('food');
+  const [selectedSyncIds, setSelectedSyncIds] = useState<string[]>([]);
 
   useEffect(() => {
     void (async () => {
@@ -321,6 +326,57 @@ export default function App() {
     }
   }
 
+  async function syncFromGame(chooseFolder = false) {
+    if (dataDirty && !confirm('Discard unsaved data changes before scanning the installed game?')) return;
+    let gamePath = settings.gamePath ?? bootstrap?.defaultGameDirectory ?? null;
+    if (chooseFolder || !gamePath) {
+      const selected = await open({
+        multiple: false,
+        directory: true,
+        title: 'Select The Last Caretaker game folder',
+        defaultPath: gamePath ?? undefined,
+      });
+      if (typeof selected !== 'string') return;
+      gamePath = selected;
+    }
+    setBusy('Reading installed game catalogues…');
+    setError('');
+    setNotice('');
+    try {
+      const proposal = await api.scanGameData(gamePath);
+      setSettings((current) => ({ ...current, gamePath: proposal.source.gamePath }));
+      setSyncProposal(proposal);
+      setSyncSection(dataKind);
+      setSelectedSyncIds(proposal.sections.flatMap((section) => section.changes.filter((change) => change.selectedByDefault).map((change) => change.id)));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function applyGameSync() {
+    if (!syncProposal || selectedSyncIds.length === 0) return;
+    setBusy(`Applying ${selectedSyncIds.length} reviewed game-data changes…`);
+    setError('');
+    try {
+      const result = await api.applyGameDataSync(syncProposal, selectedSyncIds);
+      setCatalogues(result.catalogues);
+      setAssetMappings(result.assetMappings);
+      if (dataKind === 'mappings') setDraftMappings(Object.entries(result.assetMappings));
+      else setDraftDocument(cloneDocument(result.catalogues[dataKind]));
+      setDataDirty(false);
+      setSyncProposal(null);
+      setSelectedSyncIds([]);
+      setRecipe(null);
+      setNotice(`${result.appliedCount} reviewed changes applied. Backups were created before replacing local data files.`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function calculate() {
     if (!selectedProfession) return;
     setBusy(`Optimizing ${selectedProfession}…`);
@@ -374,6 +430,7 @@ export default function App() {
 
   const selectedAssessment = assessments.find((human) => human.profession === selectedProfession);
   const inventoryUnits = Object.values(workingInventory).reduce((sum, quantity) => sum + quantity, 0);
+  const visibleSyncChanges = syncProposal?.sections.find((section) => section.kind === syncSection)?.changes ?? [];
 
   return (
     <div className="app-shell">
@@ -515,6 +572,7 @@ export default function App() {
                 {(['food', 'memories', 'humans', 'mappings'] as DataKind[]).map((kind) => <button className={dataKind === kind ? 'active' : ''} key={kind} onClick={() => { if (!dataDirty || confirm('Discard unsaved data changes?')) setDataKind(kind); }}>{kind}</button>)}
               </div>
               <div className="toolbar-actions">
+                <button className="button ghost sync-button" disabled={!!busy} onClick={() => syncFromGame()}><Database size={16} /> Sync from game</button>
                 <button className="button ghost" onClick={reloadData}><RefreshCw size={16} /> Reload</button>
                 <button className="button ghost" onClick={importData}><Upload size={16} /> Import {dataKind === 'mappings' ? 'JSON' : 'CSV'}</button>
                 <button className="button ghost" onClick={exportData}><Download size={16} /> Export {dataKind === 'mappings' ? 'JSON' : 'CSV'}</button>
@@ -579,6 +637,51 @@ export default function App() {
                   <div className="collision-box"><CircleAlert size={18} /><div><strong>Possible profession matches</strong><span>A recipe can satisfy more than one profession. The game's tie-breaking rule is not confirmed, so this list is shown instead of claiming a guaranteed result.</span><div className="match-tags">{recipe.matchedProfessions.map((profession) => <span className={profession === recipe.profession ? 'target' : ''} key={profession}>{profession}</span>)}</div></div></div>
                 </div>
               )}
+            </section>
+          </div>
+        )}
+
+        {syncProposal && (
+          <div className="sync-overlay" role="dialog" aria-modal="true" aria-label="Review installed game changes">
+            <section className="sync-dialog panel">
+              <div className="sync-header">
+                <div><span className="eyebrow">INSTALLED GAME · REVIEW BEFORE APPLYING</span><h2>Game data synchronization</h2><p title={syncProposal.source.gamePath}>{syncProposal.source.gamePath}</p></div>
+                <button className="icon-button sync-close" aria-label="Close synchronization review" onClick={() => setSyncProposal(null)}><X size={20} /></button>
+              </div>
+              <div className="sync-source-strip">
+                <span><strong>{syncProposal.source.extractedCount}</strong> catalogue assets read</span>
+                <span><strong>{syncProposal.source.packageCount}</strong> installed packages indexed</span>
+                <button className="button ghost" onClick={() => syncFromGame(true)}><FolderOpen size={15} /> Change game folder</button>
+              </div>
+              {!!syncProposal.source.warnings.length && <div className="sync-warnings"><CircleAlert size={17} /><div><strong>{syncProposal.source.warnings.length} extraction warnings</strong>{syncProposal.source.warnings.slice(0, 3).map((warning) => <span key={warning}>{warning}</span>)}</div></div>}
+              <div className="sync-section-tabs">
+                {syncProposal.sections.map((section) => <button className={syncSection === section.kind ? 'active' : ''} key={section.kind} onClick={() => setSyncSection(section.kind)}><span>{section.kind}</span><strong>{section.changes.length}</strong></button>)}
+              </div>
+              <div className="sync-controls">
+                <div><strong>{selectedSyncIds.length} selected</strong><span>Missing and unsupported entries are never applied or deleted.</span></div>
+                <button className="button ghost" onClick={() => setSelectedSyncIds((current) => Array.from(new Set([...current, ...visibleSyncChanges.filter((change) => change.selectedByDefault).map((change) => change.id)])))}>Select safe</button>
+                <button className="button ghost" onClick={() => setSelectedSyncIds((current) => current.filter((id) => !visibleSyncChanges.some((change) => change.id === id)))}>Clear section</button>
+              </div>
+              <div className="sync-change-list">
+                {visibleSyncChanges.length === 0 && <div className="empty-state"><Check size={32} /><strong>No differences in this section</strong><span>The installed game and local data agree.</span></div>}
+                {visibleSyncChanges.map((change) => {
+                  const checked = selectedSyncIds.includes(change.id);
+                  return <label className={`sync-change ${checked ? 'selected' : ''} ${!change.canApply ? 'diagnostic' : ''}`} key={change.id}>
+                    <input type="checkbox" checked={checked} disabled={!change.canApply} onChange={(event) => setSelectedSyncIds((current) => event.target.checked ? [...current, change.id] : current.filter((id) => id !== change.id))} />
+                    <div className="sync-change-body">
+                      <div className="sync-change-title">{change.iconDataUrl && <img className="sync-item-icon" src={change.iconDataUrl} alt="" />}<span className={`sync-action ${change.action}`}>{change.action}</span><strong>{change.displayName}</strong>{change.iconAsset && !change.iconDataUrl && <span className="sync-icon-found" title={change.iconAsset}>icon asset</span>}</div>
+                      {change.assetName && <code>{change.assetName}</code>}
+                      <p>{change.summary}</p>
+                      {change.reason && <small>{change.reason}</small>}
+                    </div>
+                  </label>;
+                })}
+              </div>
+              <div className="sync-footer">
+                <p>Only the portable CSV and mapping files are changed. The game installation and save remain read-only.</p>
+                <button className="button secondary" onClick={() => setSyncProposal(null)}>Cancel</button>
+                <button className="button primary" disabled={selectedSyncIds.length === 0 || !!busy} onClick={applyGameSync}><Save size={16} /> Apply {selectedSyncIds.length || ''} selected</button>
+              </div>
             </section>
           </div>
         )}

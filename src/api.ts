@@ -7,6 +7,8 @@ import type {
   InventoryReport,
   RecipeResult,
   Settings,
+  SyncApplyResult,
+  SyncProposal,
 } from './types';
 
 export const api = {
@@ -21,6 +23,9 @@ export const api = {
   saveCatalogue: (document: CsvDocument) => invoke<CsvDocument>('save_catalogue', { document }),
   importCatalogue: (kind: string, sourcePath: string) => invoke<CsvDocument>('import_catalogue', { kind, sourcePath }),
   exportCatalogue: (kind: string, targetPath: string) => invoke<void>('export_catalogue', { kind, targetPath }),
+  scanGameData: (gamePath?: string | null) => invoke<SyncProposal>('scan_game_data', { gamePath: gamePath ?? null }),
+  applyGameDataSync: (proposal: SyncProposal, selectedIds: string[]) =>
+    invoke<SyncApplyResult>('apply_game_data_sync', { proposal, selectedIds }),
   assessHumans: (inventory: Record<string, number>) => invoke<HumanAssessment[]>('assess_humans', { inventory }),
   calculateRecipe: (inventory: Record<string, number>, profession: string, objective: string) =>
     invoke<RecipeResult>('calculate_recipe', { inventory, profession, objective }),

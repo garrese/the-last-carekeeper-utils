@@ -103,16 +103,31 @@ The current save has 23 player-box records; most contain no growth resources.
 
 The game serializes the chest content sequence twice, probably once for the actor and once for a component. Never divide quantities blindly. Collapse a sequence only when it has even length and its ordered second half matches the ordered first half exactly in both asset name and quantity. Preserve a non-matching sequence and emit a diagnostic.
 
+## Canonical backpack serialization
+
+The save captured on 2026-08-25 after moving memories into the backpack decompresses to 59,843,641 bytes. Its character actor spans offsets 7,370,022 through 7,479,116. Eleven memory stacks occur twice with identical names, order and quantities: first after the localized `Equipment` section at `0x70A45E`, then after the localized `Backpack` section at `0x70D2DF`. Four food stacks occur only after those repeated blocks.
+
+`DA_Memory_Drawings_Notes` occurs at `0x70ABD3` and `0x70DE42`, with quantity 1 in both serialized views. It is one owned item, not two stacks. Character inventory extraction must therefore start at the canonical localized `Backpack` section when it is present. The section is accepted only when it is tied to `ST_Inventory` and followed by an `Items` serialization marker. The full-character scan remains a diagnostic compatibility fallback; chest mirror handling remains the stricter exact-whole-sequence rule above.
+
 ## Asset aliases
 
-Verified aliases include the four foods and the unambiguous memory names recorded in `data/asset-mappings.json`. The following remain deliberately unresolved:
+Verified aliases include the four foods and the unambiguous memory names recorded in `data/asset-mappings.json`. `DA_Memory_Drawings_Notes` is verified as `Travel Journal` by an in-game move test and the installed DataAsset. The asset references the `Memory_Drawing_Notes_Name` localization key, its textures are named `T_Memo_Travelnote_*`, and its only human-property reference is `Adaptability` with a value of 10. The technical asset name and localized display name are intentionally different layers.
+
+The following remain deliberately unresolved:
 
 - `DA_Memory_BasketBall_Blue`: not proven equivalent to `Basketball`
-- `DA_Memory_Drawings_Notes`: no unambiguous CSV match
 - `DA_Memory_Books_Tommy`: `Tommy` and `Where's Tommy` both exist
 - `DA_Memory_Drawings_Diagrams`: previously guessed as `Assembly Instructions`
 
 Unknown or ambiguous assets must remain visible and manually assignable rather than silently guessed.
+
+## Installed asset value extraction
+
+The Windows installation inspected on 2026-08-25 is under `F:\SteamLibrary\steamapps\common\Voyage` (Steam app 1783560, build 23962331). Read-only extraction with `retoc` converted 70 `DA_Memory_*` and 15 `DA_Food_*` assets from the IoStore containers; `repak` unpacked the converted copies under the ignored `src-tauri/target/asset-inspection` directory. No installed file was modified.
+
+The converted exports encode each human-property import, followed by its floating-point contribution. A parser built against `retoc`'s legacy package reader associated package indices with property names. It reproduced every checked CSV vector exactly: for example, `DA_Food_High-FatEnergy` is Weight 8 plus Height, Intellect, Life Expectancy and Strength 1; `DA_Memory_Drawings_Notes` is Adaptability 10. The extraction also found currently uncatalogued technical assets such as `DA_Food_Digestive_Overdrive` (Adaptability 5), `DA_Food_Genesis_Prime` (50/50/40/10/10 physical values) and multiple late-game memories.
+
+The next investigation step is already staged locally: converted copies of `ST_Memories` and `ST_Food` exist in `src-tauri/target/asset-inspection`. Parse those string tables to cross-reference localized display names before adding further aliases; do not infer mappings from similar technical names alone.
 
 ## Verified analysis tools
 

@@ -42,6 +42,7 @@ const DEFAULT_MAPPINGS: &str = r#"{
   "DA_Memory_Drawings_MCogni": "Cognitive Cards",
   "DA_Memory_Drawings_MSurvival": "Survival Diagrams",
   "DA_Memory_Drawings_Music": "Music Notes",
+  "DA_Memory_Drawings_Notes": "Travel Journal",
   "DA_Memory_Drawings_Plans": "Plans",
   "DA_Memory_Guitar": "Guitar",
   "DA_Memory_Mirror": "Mirror",

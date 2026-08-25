@@ -1,0 +1,16 @@
+[package]
+name = "jmap"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+base64 = "0.22"
+bitflags = { version = "2.9.4", features = ["bytemuck", "serde"] }
+bytemuck = { version = "1.23.2", features = ["derive"] }
+ordered-float = { version = "5.0.0", features = ["serde"] }
+ordermap = { version = "0.5.12", features = ["serde"] }
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
+strum = { version = "0.27", features = ["derive"] }
+

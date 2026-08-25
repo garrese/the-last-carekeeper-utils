@@ -74,3 +74,11 @@ node code\analysis\analyze-player-boxes.mjs '<path-to-save.sav>'
 - Separate parser/domain changes from UI presentation changes.
 - Avoid broad filesystem permissions and avoid shell execution from the webview.
 - Run focused tests for the changed layer, then the complete parser/optimizer suite before packaging.
+
+## Git workflow
+
+- Create a `codex/` work branch for each development task; do not develop directly on `main` or `develop`.
+- Prefer several small, coherent commits over one broad commit.
+- At the end of each completed task/turn, merge the work branch into `develop`, never directly into `main`.
+- Push the work and updated `develop` branch to the configured `origin` after verification. The user has pre-authorized ordinary non-force pushes to this repository; do not ask again for routine pushes.
+- Keep `main` for explicitly requested releases or promotion from `develop`. Never force-push or rewrite shared history without explicit approval.

@@ -76,6 +76,7 @@ export default function App() {
   const [draftMappings, setDraftMappings] = useState<[string, string][]>([]);
   const [dataDirty, setDataDirty] = useState(false);
   const [dataSearch, setDataSearch] = useState('');
+  const [pendingMappingAsset, setPendingMappingAsset] = useState<string | null>(null);
   const [newChestName, setNewChestName] = useState('');
   const [humanSearch, setHumanSearch] = useState('');
   const [achievableOnly, setAchievableOnly] = useState(false);
@@ -115,6 +116,15 @@ export default function App() {
     setDataDirty(false);
     setDataSearch('');
   }, [dataKind, catalogues, assetMappings]);
+
+  useEffect(() => {
+    if (dataKind !== 'mappings' || !pendingMappingAsset) return;
+    const alreadyMapped = Object.prototype.hasOwnProperty.call(assetMappings, pendingMappingAsset);
+    setDraftMappings((current) => current.some(([asset]) => asset === pendingMappingAsset) ? current : [...current, [pendingMappingAsset, '']]);
+    setDataSearch(pendingMappingAsset);
+    if (!alreadyMapped) setDataDirty(true);
+    setPendingMappingAsset(null);
+  }, [dataKind, pendingMappingAsset, assetMappings]);
 
   useEffect(() => {
     if (!catalogues) return;
@@ -206,6 +216,12 @@ export default function App() {
   function updateMapping(rowIndex: number, columnIndex: 0 | 1, value: string) {
     setDraftMappings((current) => current.map((row, index) => index === rowIndex ? row.map((cell, column) => column === columnIndex ? value : cell) as [string, string] : row));
     setDataDirty(true);
+  }
+
+  function openAssetMapping(assetName: string) {
+    setPendingMappingAsset(assetName);
+    setView('data');
+    setDataKind('mappings');
   }
 
   function addCatalogueRow() {
@@ -454,19 +470,12 @@ export default function App() {
                 <div><span className="section-index">03</span><h2>Usable growth inventory</h2><p>Quantities can be adjusted for planning. Refreshing the save restores imported values.</p></div>
                 <div className="inventory-total"><strong>{inventoryUnits}</strong><span>total units</span></div>
               </div>
-              {Object.keys(workingInventory).length ? (
-                <div className="inventory-table">
-                  {Object.entries(workingInventory).sort(([left], [right]) => left.localeCompare(right)).map(([name, quantity]) => (
-                    <label key={name}><span>{name}</span><input type="number" min="0" value={quantity} onChange={(event) => { setWorkingInventory((current) => ({ ...current, [name]: Math.max(0, Number(event.target.value) || 0) })); setRecipe(null); }} /></label>
-                  ))}
-                </div>
-              ) : <div className="empty-state"><PackageOpen size={34} /><strong>No inventory loaded</strong><span>Select and refresh a save to import the player backpack.</span></div>}
               {!!unresolvedDiagnostics.length && (
                 <div className="unresolved-box">
                   <div className="unresolved-heading">
                     <CircleAlert size={18} />
-                    <div><strong>Unresolved game assets</strong><span>These quantities are excluded from the calculator until each asset is assigned to a verified catalogue item.</span></div>
-                    <button className="button ghost" onClick={() => { setView('data'); setDataKind('mappings'); }}>Edit asset aliases</button>
+                    <div><strong>{unresolvedDiagnostics.length} unresolved game {unresolvedDiagnostics.length === 1 ? 'asset' : 'assets'} found</strong><span>They are present in the selected inventory sources but excluded from the calculator until assigned to verified catalogue items.</span></div>
+                    <button className="button ghost" onClick={() => { setView('data'); setDataKind('mappings'); }}>View all mappings</button>
                   </div>
                   <div className="unresolved-list">
                     {unresolvedDiagnostics.map((diagnostic) => (
@@ -481,11 +490,19 @@ export default function App() {
                         <div className="unresolved-sources">
                           {diagnostic.sources.map((source) => <span key={source.id}>{source.kind === 'backpack' ? 'Backpack' : source.label}: <strong>{source.quantity}</strong></span>)}
                         </div>
+                        <button className="button ghost unresolved-map-button" onClick={() => openAssetMapping(diagnostic.assetName)}><Plus size={14} /> Create mapping</button>
                       </article>
                     ))}
                   </div>
                 </div>
               )}
+              {Object.keys(workingInventory).length ? (
+                <div className="inventory-table">
+                  {Object.entries(workingInventory).sort(([left], [right]) => left.localeCompare(right)).map(([name, quantity]) => (
+                    <label key={name}><span>{name}</span><input type="number" min="0" value={quantity} onChange={(event) => { setWorkingInventory((current) => ({ ...current, [name]: Math.max(0, Number(event.target.value) || 0) })); setRecipe(null); }} /></label>
+                  ))}
+                </div>
+              ) : <div className="empty-state"><PackageOpen size={34} /><strong>No inventory loaded</strong><span>Select and refresh a save to import the player backpack.</span></div>}
               {!!inventoryReport?.sources.length && <div className="source-strip">{inventoryReport.sources.map((source) => <div key={source.id}><span>{source.kind === 'backpack' ? 'BACKPACK' : 'PLAYER CHEST'}</span><strong>{source.label}</strong><em>{source.items.reduce((sum, item) => sum + item.quantity, 0)} units</em></div>)}</div>}
             </section>
           </div>

@@ -147,6 +147,7 @@ input:focus { border-color: #63883d; box-shadow: 0 0 0 2px rgba(167,232,75,.07);
 .unresolved-sources { display: flex; flex-wrap: wrap; gap: 5px; }
 .unresolved-sources > span { padding: 4px 6px; color: #b5a98e; border: 1px solid #403822; background: #13130e; font-size: .68rem; }
 .unresolved-sources strong { color: #e8be58; }
+.unresolved-map-button { justify-self: start; color: #efd18d; border-color: #594824; }
 .source-strip { display: flex; gap: 1px; overflow-x: auto; border-top: 1px solid var(--line-soft); background: var(--line-soft); }
 .source-strip > div { display: flex; min-width: 190px; flex-direction: column; gap: 4px; padding: 12px 16px; background: #101612; }
 .source-strip span { color: var(--green); font: .7rem 'IBM Plex Mono', monospace; letter-spacing: .1em; }

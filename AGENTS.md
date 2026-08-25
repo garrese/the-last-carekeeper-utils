@@ -82,3 +82,9 @@ node code\analysis\analyze-player-boxes.mjs '<path-to-save.sav>'
 - At the end of each completed task/turn, merge the work branch into `develop`, never directly into `main`.
 - Push the work and updated `develop` branch to the configured `origin` after verification. The user has pre-authorized ordinary non-force pushes to this repository; do not ask again for routine pushes.
 - Keep `main` for explicitly requested releases or promotion from `develop`. Never force-push or rewrite shared history without explicit approval.
+
+## Portable release continuity
+
+- Every new portable version must carry forward the user's editable `Food.csv`, `Memories.csv`, `Humans.csv`, and `asset-mappings.json` from the highest previous portable version.
+- Migrate only those editable catalogue and mapping files automatically; do not silently copy settings, backups, saves, or executable files between versions.
+- Keep the previous portable folder intact so the migration remains recoverable, and verify the four copied files byte-for-byte before handoff.

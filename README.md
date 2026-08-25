@@ -47,10 +47,10 @@ powershell -ExecutionPolicy Bypass -File scripts\package-portable.ps1
 ```
 
 The output is created under `portable/`. The script refuses to overwrite an existing package.
+When an older portable version exists, the script automatically carries its editable `Food.csv`, `Memories.csv`, `Humans.csv`, and `asset-mappings.json` into the new package. Previous package folders remain untouched.
 
 ## Documentation
 
 - [Architecture and safety](doc/architecture-and-safety.md)
 - [Human growth mechanics](doc/human-growth-mechanics.md)
 - [Evidence-backed initial handoff](doc/20260825-1320-initial-handoff.md)
-

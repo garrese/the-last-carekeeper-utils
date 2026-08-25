@@ -1,10 +1,11 @@
 use crate::domain::catalog;
+use crate::domain::game_sync;
 use crate::domain::optimizer;
 use crate::domain::save;
 use crate::domain::settings;
 use crate::domain::{
     BootstrapState, CatalogueBundle, CsvDocument, HumanAssessment, InventoryReport, RecipeResult,
-    Settings,
+    Settings, SyncApplyResult, SyncProposal,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -19,7 +20,32 @@ pub fn bootstrap() -> Result<BootstrapState, String> {
         portable_root: root.display().to_string(),
         default_save_directory: settings::default_save_directory()
             .map(|path| path.display().to_string()),
+        default_game_directory: settings::default_game_directory()
+            .map(|path| path.display().to_string()),
     })
+}
+
+#[tauri::command]
+pub async fn scan_game_data(game_path: Option<String>) -> Result<SyncProposal, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = settings::ensure_portable_layout()?;
+        let proposal = game_sync::scan_and_compare(&root, game_path.as_deref())?;
+        let mut configuration = settings::load_settings(&root)?;
+        configuration.game_path = Some(proposal.source.game_path.clone());
+        settings::save_settings(&root, &configuration)?;
+        Ok(proposal)
+    })
+    .await
+    .map_err(|error| format!("Game-data worker failed: {error}"))?
+}
+
+#[tauri::command]
+pub fn apply_game_data_sync(
+    proposal: SyncProposal,
+    selected_ids: Vec<String>,
+) -> Result<SyncApplyResult, String> {
+    let root = settings::ensure_portable_layout()?;
+    game_sync::apply_proposal(&root, &proposal, &selected_ids)
 }
 
 #[tauri::command]

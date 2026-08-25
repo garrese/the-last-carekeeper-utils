@@ -79,6 +79,58 @@ pub fn default_save_directory() -> Option<PathBuf> {
     })
 }
 
+pub fn default_game_directory() -> Option<PathBuf> {
+    discover_steam_game_directory().or_else(|| {
+        let candidate = PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Voyage");
+        candidate.is_dir().then_some(candidate)
+    })
+}
+
+fn discover_steam_game_directory() -> Option<PathBuf> {
+    let mut steam_roots = Vec::new();
+    if let Some(program_files) = std::env::var_os("PROGRAMFILES(X86)") {
+        steam_roots.push(PathBuf::from(program_files).join("Steam"));
+    }
+    if let Some(program_files) = std::env::var_os("PROGRAMFILES") {
+        steam_roots.push(PathBuf::from(program_files).join("Steam"));
+    }
+
+    for drive in b'C'..=b'Z' {
+        steam_roots.push(PathBuf::from(format!(r"{}:\Steam", drive as char)));
+        steam_roots.push(PathBuf::from(format!(r"{}:\SteamLibrary", drive as char)));
+    }
+
+    let mut libraries = Vec::new();
+    for root in steam_roots {
+        if root.is_dir() && !libraries.contains(&root) {
+            libraries.push(root.clone());
+        }
+        let file = root.join("steamapps/libraryfolders.vdf");
+        let Ok(text) = fs::read_to_string(file) else {
+            continue;
+        };
+        for line in text.lines() {
+            let tokens = line
+                .split('"')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("path") {
+                let path = PathBuf::from(tokens[1].replace(r"\\", r"\"));
+                if path.is_dir() && !libraries.contains(&path) {
+                    libraries.push(path);
+                }
+            }
+        }
+    }
+
+    libraries.into_iter().find_map(|library| {
+        let manifest = library.join("steamapps/appmanifest_1783560.acf");
+        let game = library.join("steamapps/common/Voyage");
+        (manifest.is_file() && game.is_dir()).then_some(game)
+    })
+}
+
 pub fn ensure_portable_layout() -> Result<PathBuf, String> {
     let root = portable_root()?;
     fs::create_dir_all(root.join("data"))

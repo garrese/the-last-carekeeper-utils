@@ -127,7 +127,7 @@ The Windows installation inspected on 2026-08-25 is under `F:\SteamLibrary\steam
 
 The converted exports encode each human-property import, followed by its floating-point contribution. A parser built against `retoc`'s legacy package reader associated package indices with property names. It reproduced every checked CSV vector exactly: for example, `DA_Food_High-FatEnergy` is Weight 8 plus Height, Intellect, Life Expectancy and Strength 1; `DA_Memory_Drawings_Notes` is Adaptability 10. The extraction also found currently uncatalogued technical assets such as `DA_Food_Digestive_Overdrive` (Adaptability 5), `DA_Food_Genesis_Prime` (50/50/40/10/10 physical values) and multiple late-game memories.
 
-The next investigation step is already staged locally: converted copies of `ST_Memories` and `ST_Food` exist in `src-tauri/target/asset-inspection`. Parse those string tables to cross-reference localized display names before adding further aliases; do not infer mappings from similar technical names alone.
+The staged investigation was completed in `doc/game-data-synchronization.md`. The production Rust synchronizer now reads the string tables and DataAssets directly from the installed IoStore containers, compares them with local CSV files, and presents all additions, changes, missing entries, and ambiguous suggestions for review. It uses pure-Rust Oodle decompression, converts supported inline item icons to review thumbnails, and never writes extracted packages to disk. Similar technical names are still not accepted as aliases without localization or explicit review.
 
 ## Verified analysis tools
 

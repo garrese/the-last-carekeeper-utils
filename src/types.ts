@@ -1,6 +1,7 @@
 export type Settings = {
   savePath: string | null;
   chestNames: string[];
+  gamePath: string | null;
 };
 
 export type CsvDocument = {
@@ -49,6 +50,47 @@ export type BootstrapState = {
   assetMappings: Record<string, string>;
   portableRoot: string;
   defaultSaveDirectory: string | null;
+  defaultGameDirectory: string | null;
+};
+
+export type GameSyncSource = {
+  gamePath: string;
+  paksPath: string;
+  packageCount: number;
+  extractedCount: number;
+  warnings: string[];
+};
+
+export type SyncChange = {
+  id: string;
+  section: 'food' | 'memories' | 'humans' | 'mappings';
+  action: 'added' | 'changed' | 'suggested' | 'missing' | 'unsupported' | 'blocked' | 'conflict';
+  assetName: string | null;
+  displayName: string;
+  summary: string;
+  current: string[] | null;
+  proposed: string[] | null;
+  selectedByDefault: boolean;
+  canApply: boolean;
+  reason: string | null;
+  iconAsset: string | null;
+  iconDataUrl: string | null;
+};
+
+export type SyncSection = {
+  kind: SyncChange['section'];
+  changes: SyncChange[];
+};
+
+export type SyncProposal = {
+  source: GameSyncSource;
+  sections: SyncSection[];
+};
+
+export type SyncApplyResult = {
+  appliedCount: number;
+  catalogues: CatalogueBundle;
+  assetMappings: Record<string, string>;
 };
 
 export type HumanAssessment = {

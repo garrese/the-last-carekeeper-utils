@@ -178,6 +178,14 @@ pub fn validate_document(document: &CsvDocument) -> Result<(), String> {
 
 pub fn save_document(root: &Path, document: &CsvDocument) -> Result<CsvDocument, String> {
     validate_document(document)?;
+    let bytes = serialize_document(document)?;
+    let path = catalogue_path(root, &document.kind)?;
+    atomic_write(&path, &bytes, root)?;
+    load_document(&path, &document.kind)
+}
+
+pub fn serialize_document(document: &CsvDocument) -> Result<Vec<u8>, String> {
+    validate_document(document)?;
     let mut writer = WriterBuilder::new()
         .delimiter(b';')
         .terminator(csv::Terminator::CRLF)
@@ -190,12 +198,9 @@ pub fn save_document(root: &Path, document: &CsvDocument) -> Result<CsvDocument,
             .write_record(row)
             .map_err(|error| format!("Could not serialize CSV row: {error}"))?;
     }
-    let bytes = writer
+    writer
         .into_inner()
-        .map_err(|error| format!("Could not finish CSV: {error}"))?;
-    let path = catalogue_path(root, &document.kind)?;
-    atomic_write(&path, &bytes, root)?;
-    load_document(&path, &document.kind)
+        .map_err(|error| format!("Could not finish CSV: {error}"))
 }
 
 pub fn import_document(root: &Path, kind: &str, source: &Path) -> Result<CsvDocument, String> {
@@ -229,7 +234,7 @@ pub fn load_asset_mappings(root: &Path) -> Result<BTreeMap<String, String>, Stri
     Ok(mappings)
 }
 
-fn validate_asset_mappings(
+pub fn validate_asset_mappings(
     mappings: &BTreeMap<String, String>,
     catalogues: &CatalogueBundle,
 ) -> Result<(), String> {
@@ -263,13 +268,20 @@ fn validate_asset_mappings(
     Ok(())
 }
 
+pub fn serialize_asset_mappings(
+    mappings: &BTreeMap<String, String>,
+    catalogues: &CatalogueBundle,
+) -> Result<Vec<u8>, String> {
+    validate_asset_mappings(mappings, catalogues)?;
+    serde_json::to_vec_pretty(mappings)
+        .map_err(|error| format!("Could not serialize asset mappings: {error}"))
+}
+
 pub fn save_asset_mappings(
     root: &Path,
     mappings: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, String> {
-    validate_asset_mappings(mappings, &load_all(root)?)?;
-    let bytes = serde_json::to_vec_pretty(mappings)
-        .map_err(|error| format!("Could not serialize asset mappings: {error}"))?;
+    let bytes = serialize_asset_mappings(mappings, &load_all(root)?)?;
     atomic_write(&root.join("data/asset-mappings.json"), &bytes, root)?;
     load_asset_mappings(root)
 }

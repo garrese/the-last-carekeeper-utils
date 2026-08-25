@@ -17,6 +17,8 @@ pub fn run() {
             commands::save_catalogue,
             commands::import_catalogue,
             commands::export_catalogue,
+            commands::scan_game_data,
+            commands::apply_game_data_sync,
             commands::assess_humans,
             commands::calculate_recipe,
         ])

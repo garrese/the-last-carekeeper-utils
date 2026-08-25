@@ -1,4 +1,5 @@
 pub mod catalog;
+pub mod game_sync;
 pub mod optimizer;
 pub mod save;
 pub mod settings;
@@ -44,6 +45,8 @@ pub struct Settings {
     pub save_path: Option<String>,
     #[serde(default)]
     pub chest_names: Vec<String>,
+    #[serde(default)]
+    pub game_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +107,57 @@ pub struct BootstrapState {
     pub asset_mappings: BTreeMap<String, String>,
     pub portable_root: String,
     pub default_save_directory: Option<String>,
+    pub default_game_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GameSyncSource {
+    pub game_path: String,
+    pub paks_path: String,
+    pub package_count: usize,
+    pub extracted_count: usize,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncChange {
+    pub id: String,
+    pub section: String,
+    pub action: String,
+    pub asset_name: Option<String>,
+    pub display_name: String,
+    pub summary: String,
+    pub current: Option<Vec<String>>,
+    pub proposed: Option<Vec<String>>,
+    pub selected_by_default: bool,
+    pub can_apply: bool,
+    pub reason: Option<String>,
+    pub icon_asset: Option<String>,
+    pub icon_data_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncSection {
+    pub kind: String,
+    pub changes: Vec<SyncChange>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProposal {
+    pub source: GameSyncSource,
+    pub sections: Vec<SyncSection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncApplyResult {
+    pub applied_count: usize,
+    pub catalogues: CatalogueBundle,
+    pub asset_mappings: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

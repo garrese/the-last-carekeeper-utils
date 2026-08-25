@@ -37,7 +37,7 @@ The backpack is always included. Player boxes are included only when their custo
 
 Unknown asset names remain visible as unresolved diagnostics. Ambiguous aliases are not guessed. Mirrored chest sequences are collapsed only when both ordered halves are exactly identical; a mismatch is preserved and reported.
 
-The save stores inventory asset references and quantities, not the growth-stat bonuses defined by those assets. Food and memory bonuses therefore come from the editable CSV catalogues. Recovering authoritative bonuses for an unknown asset requires inspecting the game's packaged DataAsset content or another verified source; the application must not infer them from the asset name.
+The save stores inventory asset references and quantities, not the growth-stat bonuses defined by those assets. Food and memory bonuses therefore come from the editable CSV catalogues. The optional installed-game synchronizer can recover authoritative bonuses, localization keys, and supported icons from packaged DataAssets in a separate read-only operation. Every difference is reviewed before it updates a local CSV or mapping; it never infers aliases from similar technical names.
 
 ## Optimizer boundary
 

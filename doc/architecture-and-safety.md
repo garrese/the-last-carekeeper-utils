@@ -37,9 +37,10 @@ The backpack is always included. Player boxes are included only when their custo
 
 Unknown asset names remain visible as unresolved diagnostics. Ambiguous aliases are not guessed. Mirrored chest sequences are collapsed only when both ordered halves are exactly identical; a mismatch is preserved and reported.
 
+The save stores inventory asset references and quantities, not the growth-stat bonuses defined by those assets. Food and memory bonuses therefore come from the editable CSV catalogues. Recovering authoritative bonuses for an unknown asset requires inspecting the game's packaged DataAsset content or another verified source; the application must not infer them from the asset name.
+
 ## Optimizer boundary
 
 Food and memories contribute to disjoint stat groups, so each group is solved with bounded dynamic programming under actual inventory limits. The user can prioritize minimum total excess or minimum item count; the other criterion breaks ties.
 
 The result reports requirements, totals, deficits, excess, item quantities, and every profession whose thresholds the recipe satisfies. Applying or editing a recipe changes only in-memory planning quantities. It never writes inventory back to the game save.
-

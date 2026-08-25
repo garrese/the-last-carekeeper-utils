@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+dist/
+src-tauri/target/
+portable/
+config/
+backups/
+*.log
+*.sav

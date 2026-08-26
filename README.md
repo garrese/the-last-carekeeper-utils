@@ -51,6 +51,7 @@ When an older portable version exists, the script automatically carries its edit
 
 ## Documentation
 
+- [Changelog](doc/CHANGELOG.md)
 - [Architecture and safety](doc/architecture-and-safety.md)
 - [Human growth mechanics](doc/human-growth-mechanics.md)
 - [Evidence-backed initial handoff](doc/20260825-1320-initial-handoff.md)

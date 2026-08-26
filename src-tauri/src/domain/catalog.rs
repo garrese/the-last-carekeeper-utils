@@ -120,12 +120,6 @@ fn validate_headers(kind: &str, headers: &[String]) -> Result<(), String> {
 
 pub fn validate_document(document: &CsvDocument) -> Result<(), String> {
     validate_headers(&document.kind, &document.headers)?;
-    if document.rows.is_empty() {
-        return Err(format!(
-            "The {} catalogue must contain at least one row.",
-            document.kind
-        ));
-    }
     let name_column = if document.kind == "humans" { 1 } else { 0 };
     let numeric_start = if document.kind == "humans" { 2 } else { 1 };
     let mut names = HashSet::new();
@@ -319,6 +313,13 @@ mod tests {
     fn accepts_empty_stat_cells() {
         let csv = b"Memory;Adaptability;Communication;Creativity;Discipline;Empathy;Focus;Leadership;Logic;Patience;Wisdom;WorldCount\nMaps;1;;;;;;;2;;;3\n";
         assert!(parse_document(csv, "memories", "Memories.csv").is_ok());
+    }
+
+    #[test]
+    fn accepts_a_header_only_catalogue_for_game_sync_bootstrapping() {
+        let csv = b"Food;Height;Intellect;Life Exp;Strength;Weight;TotalAvailability\n";
+        let document = parse_document(csv, "food", "Food.csv").unwrap();
+        assert!(document.rows.is_empty());
     }
 
     #[test]

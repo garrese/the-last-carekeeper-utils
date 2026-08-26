@@ -44,6 +44,7 @@ struct ExtractedHuman {
     display_name: String,
     requirements: BTreeMap<String, i32>,
     unsupported_stats: Vec<String>,
+    tier: Option<u8>,
 }
 
 #[derive(Default)]
@@ -210,12 +211,19 @@ fn extract_catalogue(
             continue;
         };
         if package_path.starts_with(ITEM_FOOD_PREFIX) && stem.starts_with("DA_Food_") {
-            match parse_item(stem, "food", uasset, uexp, &food_strings) {
+            match parse_item(stem, "food", &package_path, uasset, uexp, &food_strings) {
                 Ok(item) => items.push(item),
                 Err(error) => warnings.push(format!("{stem}: {error}")),
             }
         } else if package_path.starts_with(ITEM_MEMORY_PREFIX) && stem.starts_with("DA_Memory_") {
-            match parse_item(stem, "memories", uasset, uexp, &memory_strings) {
+            match parse_item(
+                stem,
+                "memories",
+                &package_path,
+                uasset,
+                uexp,
+                &memory_strings,
+            ) {
                 Ok(item) => items.push(item),
                 Err(error) => warnings.push(format!("{stem}: {error}")),
             }
@@ -229,6 +237,7 @@ fn extract_catalogue(
     }
     extract_item_icons(&context, &packages_by_path, &mut items, &mut warnings);
     items.sort_by(|left, right| left.asset_name.cmp(&right.asset_name));
+    assign_human_tiers(&mut humans);
     humans.sort_by(|left, right| left.asset_name.cmp(&right.asset_name));
     Ok((items, humans, package_count, extracted_count, warnings))
 }
@@ -267,6 +276,7 @@ fn find_asset_pair<'a>(
 fn parse_item(
     asset_name: &str,
     kind: &str,
+    package_path: &str,
     uasset: &[u8],
     uexp: &[u8],
     strings: &BTreeMap<String, String>,
@@ -288,8 +298,7 @@ fn parse_item(
     Ok(ExtractedItem {
         asset_name: asset_name.to_string(),
         kind: kind.to_string(),
-        is_development: display_name.to_ascii_lowercase().contains("[dev]")
-            || asset_name.to_ascii_lowercase().contains("megafat"),
+        is_development: is_development_asset(package_path, asset_name, &display_name),
         display_name,
         localization_key,
         stats,
@@ -297,6 +306,18 @@ fn parse_item(
         icon_asset,
         icon_data_url: None,
     })
+}
+
+fn is_development_asset(package_path: &str, asset_name: &str, display_name: &str) -> bool {
+    let path = package_path.to_ascii_lowercase();
+    display_name.to_ascii_lowercase().contains("[dev]")
+        || asset_name.to_ascii_lowercase().contains("megafat")
+        || path.split('/').any(|segment| {
+            matches!(
+                segment,
+                "notused" | "not_used" | "unused" | "development" | "developer" | "dev"
+            )
+        })
 }
 
 fn extract_item_icons(
@@ -421,7 +442,10 @@ fn parse_human(
     uexp: &[u8],
 ) -> Result<ExtractedHuman, String> {
     let imports = import_names(uasset)?;
-    let (requirements, unsupported_stats) = extract_stats(&imports, uexp, "humans");
+    let (mut requirements, unsupported_stats) = extract_stats(&imports, uexp, "humans");
+    for (stat, baseline) in [("Weight", 20), ("Height", 30), ("Life Exp", 10)] {
+        requirements.entry(stat.to_string()).or_insert(baseline);
+    }
     let display_name = best_human_display_name(asset_name, uexp);
     let folder = package_path
         .strip_prefix(PROFESSION_PREFIX)
@@ -444,7 +468,41 @@ fn parse_human(
         display_name,
         requirements,
         unsupported_stats,
+        tier: None,
     })
+}
+
+fn assign_human_tiers(humans: &mut [ExtractedHuman]) {
+    let mut categories = BTreeMap::<String, Vec<usize>>::new();
+    for (index, human) in humans.iter().enumerate() {
+        if human.unsupported_stats.is_empty() {
+            categories
+                .entry(human.category.clone())
+                .or_default()
+                .push(index);
+        }
+    }
+    for indices in categories.values_mut() {
+        if indices.len() != 4 {
+            continue;
+        }
+        indices.sort_by_key(|index| {
+            (
+                humans[*index].requirements.values().sum::<i32>(),
+                humans[*index].asset_name.clone(),
+            )
+        });
+        let totals = indices
+            .iter()
+            .map(|index| humans[*index].requirements.values().sum::<i32>())
+            .collect::<Vec<_>>();
+        if totals.windows(2).any(|pair| pair[0] >= pair[1]) {
+            continue;
+        }
+        for (tier, index) in indices.iter().enumerate() {
+            humans[*index].tier = Some((tier + 1) as u8);
+        }
+    }
 }
 
 fn import_names(uasset: &[u8]) -> Result<Vec<String>, String> {
@@ -700,6 +758,73 @@ fn humanize_words(value: &str) -> String {
     value.replace(['_', '-'], " ")
 }
 
+fn item_name_key(item: &ExtractedItem) -> (String, String) {
+    (item.kind.clone(), item.display_name.to_ascii_lowercase())
+}
+
+fn plan_item_names(items: &[ExtractedItem]) -> (HashSet<String>, HashSet<String>) {
+    let mut groups = BTreeMap::<(String, String), Vec<&ExtractedItem>>::new();
+    for item in items {
+        groups.entry(item_name_key(item)).or_default().push(item);
+    }
+    let mut owners = HashSet::new();
+    let mut conflicts = HashSet::new();
+    for group in groups.values_mut() {
+        group.sort_by(|left, right| left.asset_name.cmp(&right.asset_name));
+        let candidates = group
+            .iter()
+            .copied()
+            .filter(|item| !item.is_development)
+            .collect::<Vec<_>>();
+        let candidates = if candidates.is_empty() {
+            group.clone()
+        } else {
+            candidates
+        };
+        let owner = candidates[0];
+        let incompatible_production_assets = candidates.iter().any(|item| {
+            item.stats != owner.stats || item.unsupported_stats != owner.unsupported_stats
+        });
+        if incompatible_production_assets {
+            conflicts.extend(group.iter().map(|item| item.asset_name.clone()));
+            continue;
+        }
+        owners.insert(owner.asset_name.clone());
+        for item in group
+            .iter()
+            .copied()
+            .filter(|item| item.asset_name != owner.asset_name)
+        {
+            if item.stats != owner.stats || item.unsupported_stats != owner.unsupported_stats {
+                conflicts.insert(item.asset_name.clone());
+            }
+        }
+    }
+    (owners, conflicts)
+}
+
+fn item_name_conflict(item: &ExtractedItem) -> SyncChange {
+    SyncChange {
+        id: change_id(&item.kind, "conflict", &item.asset_name),
+        section: item.kind.clone(),
+        action: "conflict".to_string(),
+        asset_name: Some(item.asset_name.clone()),
+        display_name: item.display_name.clone(),
+        summary: "Another installed asset uses the same display name with different values."
+            .to_string(),
+        current: None,
+        proposed: None,
+        selected_by_default: false,
+        can_apply: false,
+        reason: Some(
+            "Keep this technical asset separate or assign it manually; it cannot share one catalogue row safely."
+                .to_string(),
+        ),
+        icon_asset: item.icon_asset.clone(),
+        icon_data_url: item.icon_data_url.clone(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn compare_catalogues(
     game_path: &Path,
@@ -718,8 +843,13 @@ fn compare_catalogues(
     let mut mapping_changes = Vec::new();
     let mut matched_food = HashSet::new();
     let mut matched_memories = HashSet::new();
+    let (catalogue_owners, conflicting_assets) = plan_item_names(items);
+    let mut planned_catalogue_targets = HashSet::<(String, String)>::new();
 
     for item in items {
+        let item_key = item_name_key(item);
+        let owns_catalogue_change = catalogue_owners.contains(&item.asset_name);
+        let has_name_conflict = conflicting_assets.contains(&item.asset_name);
         let document = if item.kind == "food" {
             &catalogues.food
         } else {
@@ -751,7 +881,9 @@ fn compare_catalogues(
                 matched_memories.insert(row[0].to_ascii_lowercase());
             }
             let proposed = merge_stats(document, row, &item.stats);
-            if proposed != *row {
+            if has_name_conflict {
+                section_changes.push(item_name_conflict(item));
+            } else if owns_catalogue_change && proposed != *row {
                 section_changes.push(SyncChange {
                     id: change_id(&item.kind, "changed", &item.asset_name),
                     section: item.kind.clone(),
@@ -768,7 +900,10 @@ fn compare_catalogues(
                     icon_data_url: item.icon_data_url.clone(),
                 });
             }
-        } else {
+            planned_catalogue_targets.insert((item.kind.clone(), row[0].to_ascii_lowercase()));
+        } else if has_name_conflict {
+            section_changes.push(item_name_conflict(item));
+        } else if owns_catalogue_change {
             let proposed = new_item_row(document, &item.display_name, &item.stats);
             let supported = item.unsupported_stats.is_empty() && !item.stats.is_empty();
             section_changes.push(SyncChange {
@@ -798,15 +933,15 @@ fn compare_catalogues(
                 icon_asset: item.icon_asset.clone(),
                 icon_data_url: item.icon_data_url.clone(),
             });
+            if supported {
+                planned_catalogue_targets.insert(item_key.clone());
+            }
         }
 
         match mapped_name {
             None => {
-                let target_exists = local.is_some()
-                    || section_changes.iter().any(|change| {
-                        change.asset_name.as_deref() == Some(item.asset_name.as_str())
-                            && change.can_apply
-                    });
+                let target_exists = !has_name_conflict
+                    && (local.is_some() || planned_catalogue_targets.contains(&item_key));
                 mapping_changes.push(SyncChange {
                     id: change_id("mappings", "added", &item.asset_name),
                     section: "mappings".to_string(),
@@ -890,6 +1025,29 @@ fn compare_catalogues(
                     icon_data_url: None,
                 });
             }
+        } else if human.unsupported_stats.is_empty() && human.tier.is_some() {
+            let proposed = new_human_row(&catalogues.humans, human);
+            human_changes.push(SyncChange {
+                id: change_id("humans", "added", &human.asset_name),
+                section: "humans".to_string(),
+                action: "added".to_string(),
+                asset_name: Some(human.asset_name.clone()),
+                display_name: proposed[1].clone(),
+                summary: format!(
+                    "New installed profession with {} complete requirements.",
+                    human.requirements.len()
+                ),
+                current: None,
+                proposed: Some(proposed),
+                selected_by_default: true,
+                can_apply: true,
+                reason: Some(
+                    "The shared physical baseline and tier were verified against every installed four-profession category."
+                        .to_string(),
+                ),
+                icon_asset: None,
+                icon_data_url: None,
+            });
         } else {
             human_changes.push(SyncChange {
                 id: change_id("humans", "unsupported", &human.asset_name),
@@ -903,7 +1061,7 @@ fn compare_catalogues(
                 selected_by_default: false,
                 can_apply: false,
                 reason: Some(if human.unsupported_stats.is_empty() {
-                    "A new profession needs its shared baseline and tier verified before it can be imported safely.".to_string()
+                    "The profession tier could not be inferred from a complete four-profession category.".to_string()
                 } else {
                     format!("Unsupported profession properties: {}.", human.unsupported_stats.join(", "))
                 }),
@@ -1041,6 +1199,17 @@ fn new_item_row(document: &CsvDocument, name: &str, stats: &BTreeMap<String, i32
     let mut row = vec![String::new(); document.headers.len()];
     row[0] = name.to_string();
     merge_stats(document, &row, stats)
+}
+
+fn new_human_row(document: &CsvDocument, human: &ExtractedHuman) -> Vec<String> {
+    let mut row = vec![String::new(); document.headers.len()];
+    row[0] = human.category.clone();
+    row[1] = format!(
+        "{} T{}",
+        human.display_name,
+        human.tier.expect("new human rows require a verified tier")
+    );
+    merge_stats(document, &row, &human.requirements)
 }
 
 fn describe_row_diff(document: &CsvDocument, current: &[String], proposed: &[String]) -> String {
@@ -1269,6 +1438,65 @@ mod tests {
         }
     }
 
+    fn empty_catalogues() -> CatalogueBundle {
+        CatalogueBundle {
+            food: document(
+                "food",
+                &[
+                    "Food",
+                    "Height",
+                    "Intellect",
+                    "Life Exp",
+                    "Strength",
+                    "Weight",
+                    "TotalAvailability",
+                ],
+                &[],
+            ),
+            memories: document(
+                "memories",
+                &[
+                    "Memory",
+                    "Adaptability",
+                    "Communication",
+                    "Creativity",
+                    "Discipline",
+                    "Empathy",
+                    "Focus",
+                    "Leadership",
+                    "Logic",
+                    "Patience",
+                    "Wisdom",
+                    "WorldCount",
+                ],
+                &[],
+            ),
+            humans: document(
+                "humans",
+                &[
+                    "Category",
+                    "Profession",
+                    "Weight",
+                    "Height",
+                    "Life Exp",
+                    "Strength",
+                    "Intellect",
+                    "Adaptability",
+                    "Creativity",
+                    "Communication",
+                    "Discipline",
+                    "Empathy",
+                    "Focus",
+                    "Leadership",
+                    "Logic",
+                    "Patience",
+                    "Wisdom",
+                ],
+                &[],
+            ),
+        }
+    }
+
     #[test]
     fn reads_unreal_string_table_pairs() {
         let mut bytes = vec![0, 1, 0, 0, 0, 0];
@@ -1456,11 +1684,114 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_development_alias_does_not_duplicate_a_catalogue_row() {
+        let items = [
+            ExtractedItem {
+                asset_name: "DA_Memory_Books_Encyclopedia".to_string(),
+                kind: "memories".to_string(),
+                display_name: "Encyclopedia".to_string(),
+                localization_key: None,
+                stats: BTreeMap::from([("Logic".to_string(), 5)]),
+                unsupported_stats: Vec::new(),
+                icon_asset: None,
+                icon_data_url: None,
+                is_development: false,
+            },
+            ExtractedItem {
+                asset_name: "DA_Memory_Encyclopedia2".to_string(),
+                kind: "memories".to_string(),
+                display_name: "Encyclopedia".to_string(),
+                localization_key: None,
+                stats: BTreeMap::from([("Logic".to_string(), 40)]),
+                unsupported_stats: Vec::new(),
+                icon_asset: None,
+                icon_data_url: None,
+                is_development: true,
+            },
+        ];
+        let proposal = compare_catalogues(
+            Path::new("game"),
+            Path::new("paks"),
+            1,
+            2,
+            Vec::new(),
+            &empty_catalogues(),
+            &BTreeMap::new(),
+            &items,
+            &[],
+        );
+        let changes = &proposal.sections[1].changes;
+        assert_eq!(
+            changes
+                .iter()
+                .filter(|change| change.action == "added")
+                .count(),
+            1
+        );
+        assert_eq!(
+            changes
+                .iter()
+                .filter(|change| change.action == "conflict")
+                .count(),
+            1
+        );
+        assert_eq!(changes.iter().filter(|change| change.can_apply).count(), 1);
+    }
+
+    #[test]
+    fn complete_profession_categories_can_bootstrap_an_empty_catalogue() {
+        let mut humans = (1..=4)
+            .map(|level| ExtractedHuman {
+                asset_name: format!("DA_Profession_Test_{level}"),
+                category: "Test".to_string(),
+                display_name: format!("Test Profession {level}"),
+                requirements: BTreeMap::from([
+                    ("Weight".to_string(), 20),
+                    ("Height".to_string(), 30),
+                    ("Life Exp".to_string(), 10),
+                    ("Logic".to_string(), level * 10),
+                ]),
+                unsupported_stats: Vec::new(),
+                tier: None,
+            })
+            .collect::<Vec<_>>();
+        assign_human_tiers(&mut humans);
+        let proposal = compare_catalogues(
+            Path::new("game"),
+            Path::new("paks"),
+            1,
+            4,
+            Vec::new(),
+            &empty_catalogues(),
+            &BTreeMap::new(),
+            &[],
+            &humans,
+        );
+        let changes = &proposal.sections[2].changes;
+        assert_eq!(changes.len(), 4);
+        assert!(
+            changes
+                .iter()
+                .all(|change| change.action == "added" && change.can_apply)
+        );
+        assert_eq!(
+            changes[0].proposed.as_ref().unwrap()[1],
+            "Test Profession 1 T1"
+        );
+        assert_eq!(
+            changes[3].proposed.as_ref().unwrap()[1],
+            "Test Profession 4 T4"
+        );
+    }
+
+    #[test]
     #[ignore = "requires a locally installed copy of The Last Caretaker"]
     fn installed_game_scan_is_consistent_when_available() {
         let game = super::super::settings::default_game_directory()
             .expect("installed Steam game was not discovered");
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let paks = resolve_paks_path(&game).unwrap();
+        let (items, humans, _, _, _) = extract_catalogue(&paks).unwrap();
         let proposal = scan_and_compare(root, game.to_str()).unwrap();
         for section in &proposal.sections {
             let counts = section
@@ -1490,6 +1821,86 @@ mod tests {
             .count();
         println!("decoded icons in proposal: {decoded_icons}");
         assert!(decoded_icons >= 10);
+        let empty_proposal = compare_catalogues(
+            &game,
+            &paks,
+            proposal.source.package_count,
+            proposal.source.extracted_count,
+            Vec::new(),
+            &empty_catalogues(),
+            &BTreeMap::new(),
+            &items,
+            &humans,
+        );
+        assert_eq!(
+            empty_proposal.sections[2]
+                .changes
+                .iter()
+                .filter(|change| change.action == "added" && change.can_apply)
+                .count(),
+            40
+        );
+        for section in &empty_proposal.sections {
+            let applicable_names = section
+                .changes
+                .iter()
+                .filter(|change| change.can_apply && change.section != "mappings")
+                .filter_map(|change| change.proposed.as_ref())
+                .map(|row| {
+                    let column = usize::from(section.kind == "humans");
+                    row[column].to_ascii_lowercase()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                applicable_names.iter().collect::<HashSet<_>>().len(),
+                applicable_names.len(),
+                "{} proposed duplicate catalogue names",
+                section.kind
+            );
+        }
+        let test_root = root.join("src-tauri/target/game-sync-empty-catalogues-test");
+        if test_root.exists() {
+            std::fs::remove_dir_all(&test_root).unwrap();
+        }
+        std::fs::create_dir_all(test_root.join("data")).unwrap();
+        std::fs::create_dir_all(test_root.join("backups")).unwrap();
+        let blank_catalogues = empty_catalogues();
+        for document in [
+            &blank_catalogues.food,
+            &blank_catalogues.memories,
+            &blank_catalogues.humans,
+        ] {
+            std::fs::write(
+                catalog::catalogue_path(&test_root, &document.kind).unwrap(),
+                catalog::serialize_document(document).unwrap(),
+            )
+            .unwrap();
+        }
+        std::fs::write(test_root.join("data/asset-mappings.json"), b"{}").unwrap();
+        let selected_ids = empty_proposal
+            .sections
+            .iter()
+            .flat_map(|section| &section.changes)
+            .filter(|change| change.selected_by_default)
+            .map(|change| change.id.clone())
+            .collect::<Vec<_>>();
+        let applied = apply_proposal(&test_root, &empty_proposal, &selected_ids).unwrap();
+        assert_eq!(applied.applied_count, selected_ids.len());
+        assert_eq!(applied.catalogues.humans.rows.len(), 40);
+        let expected_humans = catalog::load_all(root)
+            .unwrap()
+            .humans
+            .rows
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let imported_humans = applied
+            .catalogues
+            .humans
+            .rows
+            .into_iter()
+            .collect::<HashSet<_>>();
+        assert_eq!(imported_humans, expected_humans);
+        std::fs::remove_dir_all(test_root).unwrap();
         assert!(
             proposal
                 .sections

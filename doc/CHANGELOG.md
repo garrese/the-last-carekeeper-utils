@@ -9,6 +9,8 @@ portable release; their contents are not represented by source-control history.
 
 ## Unreleased
 
+## 0.1.7 - 2026-08-26
+
 ### Fixed
 
 - Bound backpack extraction to its live `Items` property, preventing unrelated

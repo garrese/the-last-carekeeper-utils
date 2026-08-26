@@ -75,6 +75,12 @@ node code\analysis\analyze-player-boxes.mjs '<path-to-save.sav>'
 - Avoid broad filesystem permissions and avoid shell execution from the webview.
 - Run focused tests for the changed layer, then the complete parser/optimizer suite before packaging.
 
+## Changelog
+
+- Read `doc/CHANGELOG.md` before planning user-visible changes, releases, data migrations, or compatibility work.
+- Update its `Unreleased` section in the same task when a change affects user-visible behavior, data compatibility, safety guarantees, release packaging, or the development workflow.
+- Keep entries concise and in English. When preparing a portable release, move the applicable `Unreleased` entries into that version's dated section.
+
 ## Git workflow
 
 - Create a `codex/` work branch for each development task; do not develop directly on `main` or `develop`.

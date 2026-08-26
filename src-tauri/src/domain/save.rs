@@ -330,19 +330,49 @@ fn deduplicate_exact_full_mirror(items: &mut Vec<RawItem>) -> bool {
     mirrored
 }
 
-fn find_backpack_section_start(raw: &[u8], start: usize, end: usize) -> Option<usize> {
+fn find_backpack_items_range(raw: &[u8], start: usize, end: usize) -> Option<(usize, usize)> {
     let inventory_table =
         fstring_pattern("/Game/LocalizationStringTables/ST_Inventory.ST_Inventory");
     let backpack = fstring_pattern("Backpack");
+    let byte_data = fstring_pattern("ByteData");
     let items = fstring_pattern("Items");
 
     find_all(raw, &backpack, start, end)
         .into_iter()
-        .find(|offset| {
+        .find_map(|offset| {
             let context_start = offset.saturating_sub(1024).max(start);
-            let context_end = offset.saturating_add(4096).min(end);
-            !find_all(raw, &inventory_table, context_start, *offset).is_empty()
-                && !find_all(raw, &items, *offset, context_end).is_empty()
+            if find_all(raw, &inventory_table, context_start, offset).is_empty() {
+                return None;
+            }
+
+            // The localized Backpack descriptor is followed by one ByteData
+            // payload for its descriptor and a second one for its live state.
+            // The canonical Items map is nested in that second payload. A third
+            // ByteData payload in the same character actor contains unrelated
+            // historical item records, so scanning to the actor end is unsafe.
+            let descriptor_context_end = offset.saturating_add(4096).min(end);
+            let backpack_payload = find_all(raw, &byte_data, offset, descriptor_context_end)
+                .into_iter()
+                .filter_map(|property_offset| {
+                    let property = read_property_at(raw, property_offset, end).ok()?;
+                    (property.name == "ByteData" && property.type_name == "ArrayProperty")
+                        .then_some(property)
+                })
+                .nth(1)?;
+
+            find_all(
+                raw,
+                &items,
+                backpack_payload.data_start,
+                backpack_payload.data_end,
+            )
+            .into_iter()
+            .find_map(|property_offset| {
+                let property =
+                    read_property_at(raw, property_offset, backpack_payload.data_end).ok()?;
+                (property.name == "Items" && property.type_name == "MapProperty")
+                    .then_some((property.data_start, property.data_end))
+            })
         })
 }
 
@@ -373,10 +403,10 @@ fn parse_sources(raw: &[u8]) -> Result<(Vec<ParsedSource>, Vec<String>), String>
             || actor.class_path == PLAYER_BOX_SMALL_CLASS
     }) {
         if actor.class_path == CHARACTER_CLASS {
-            let items = if let Some(backpack_start) =
-                find_backpack_section_start(raw, actor.offset, actor.end)
+            let items = if let Some((backpack_start, backpack_end)) =
+                find_backpack_items_range(raw, actor.offset, actor.end)
             {
-                scan_items(raw, backpack_start, actor.end)
+                scan_items(raw, backpack_start, backpack_end)
             } else {
                 warnings.push(
                     "The canonical Backpack section was not found; the character actor was scanned as a compatibility fallback."
@@ -650,27 +680,131 @@ mod tests {
         assert_eq!(items, original);
     }
 
+    fn push_simple_type(bytes: &mut Vec<u8>, name: &str) {
+        bytes.extend_from_slice(&fstring_pattern(name));
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+    }
+
+    fn push_simple_property(bytes: &mut Vec<u8>, name: &str, property_type: &str, data: &[u8]) {
+        bytes.extend_from_slice(&fstring_pattern(name));
+        push_simple_type(bytes, property_type);
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(data);
+    }
+
+    fn push_byte_data(bytes: &mut Vec<u8>, data: &[u8]) -> (usize, usize) {
+        bytes.extend_from_slice(&fstring_pattern("ByteData"));
+        bytes.extend_from_slice(&fstring_pattern("ArrayProperty"));
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&fstring_pattern("ByteProperty"));
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.push(0);
+        let data_start = bytes.len();
+        bytes.extend_from_slice(data);
+        (data_start, bytes.len())
+    }
+
+    fn serialized_item(asset_name: &str, quantity: i32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        push_simple_property(
+            &mut bytes,
+            "AssetName",
+            "NameProperty",
+            &fstring_pattern(asset_name),
+        );
+        push_simple_property(
+            &mut bytes,
+            "ItemCount",
+            "IntProperty",
+            &quantity.to_le_bytes(),
+        );
+        bytes
+    }
+
+    fn push_items_map(bytes: &mut Vec<u8>, data: &[u8]) -> (usize, usize) {
+        bytes.extend_from_slice(&fstring_pattern("Items"));
+        bytes.extend_from_slice(&fstring_pattern("MapProperty"));
+        bytes.extend_from_slice(&2i32.to_le_bytes());
+        bytes.extend_from_slice(&fstring_pattern("IntProperty"));
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&fstring_pattern("StructProperty"));
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&fstring_pattern("VoyageItemSerialize"));
+        bytes.extend_from_slice(&1i32.to_le_bytes());
+        bytes.extend_from_slice(&fstring_pattern("/Script/Voyage"));
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        bytes.push(0);
+        let data_start = bytes.len();
+        bytes.extend_from_slice(data);
+        (data_start, bytes.len())
+    }
+
     #[test]
-    fn canonical_backpack_section_requires_inventory_context() {
+    fn canonical_backpack_range_requires_inventory_context() {
         let mut raw = fstring_pattern("Backpack");
         raw.extend_from_slice(&[0; 32]);
         let inventory_offset = raw.len();
         raw.extend_from_slice(&fstring_pattern(
             "/Game/LocalizationStringTables/ST_Inventory.ST_Inventory",
         ));
-        let expected = raw.len();
+        let backpack_offset = raw.len();
         raw.extend_from_slice(&fstring_pattern("Backpack"));
-        raw.extend_from_slice(&fstring_pattern("Items"));
+        push_byte_data(&mut raw, &[]);
+        let mut backpack_payload = Vec::new();
+        let inner_range = push_items_map(&mut backpack_payload, &[]);
+        let payload_range = push_byte_data(&mut raw, &backpack_payload);
+        let expected = (
+            payload_range.0 + inner_range.0,
+            payload_range.0 + inner_range.1,
+        );
 
-        assert!(inventory_offset < expected);
+        assert!(inventory_offset < backpack_offset);
         assert_eq!(
-            find_backpack_section_start(&raw, 0, raw.len()),
+            find_backpack_items_range(&raw, 0, raw.len()),
             Some(expected)
         );
     }
 
     #[test]
-    fn verified_sample_matches_handoff_when_available() {
+    fn canonical_backpack_range_excludes_later_character_item_maps() {
+        let mut raw = fstring_pattern("/Game/LocalizationStringTables/ST_Inventory.ST_Inventory");
+        raw.extend_from_slice(&fstring_pattern("Backpack"));
+        push_byte_data(&mut raw, &[]);
+        let backpack_item = serialized_item("DA_Memory_Drawings_Cards", 2);
+        let mut backpack_payload = Vec::new();
+        let inner_range = push_items_map(&mut backpack_payload, &backpack_item);
+        push_simple_property(
+            &mut backpack_payload,
+            "Resources",
+            "IntProperty",
+            &0i32.to_le_bytes(),
+        );
+        let payload_range = push_byte_data(&mut raw, &backpack_payload);
+        let expected = (
+            payload_range.0 + inner_range.0,
+            payload_range.0 + inner_range.1,
+        );
+        let historical_food = serialized_item("DA_Food_High-FatEnergy", 1);
+        let mut historical_payload = Vec::new();
+        push_items_map(&mut historical_payload, &historical_food);
+        push_byte_data(&mut raw, &historical_payload);
+
+        let range = find_backpack_items_range(&raw, 0, raw.len()).unwrap();
+        assert_eq!(range, expected);
+        assert_eq!(
+            scan_items(&raw, range.0, range.1),
+            vec![RawItem {
+                asset_name: "DA_Memory_Drawings_Cards".into(),
+                quantity: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn verified_sample_matches_inventory_evidence_when_available() {
         let path = std::env::var_os("TLC_TEST_SAVE")
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -685,7 +819,8 @@ mod tests {
         let (raw, blocks) = decompress_save(&compressed).unwrap();
         assert!(blocks > 0);
         assert_eq!(raw.len(), 59_821_774);
-        let (sources, _) = parse_sources(&raw).unwrap();
+        let (sources, warnings) = parse_sources(&raw).unwrap();
+        assert!(!warnings.iter().any(|warning| warning.contains("fallback")));
         let backpack = sources
             .iter()
             .find(|source| source.kind == "backpack")
@@ -695,11 +830,7 @@ mod tests {
             .iter()
             .map(|item| (item.asset_name.as_str(), item.quantity))
             .collect::<BTreeMap<_, _>>();
-        assert_eq!(backpack_items.get("DA_Food_High-FatEnergy"), Some(&1));
-        assert_eq!(backpack_items.get("DA_Food_Mind_Surge"), Some(&1));
-        assert_eq!(backpack_items.get("DA_Food_Nutri-Core"), Some(&1));
-        assert_eq!(backpack_items.get("DA_Food_PhysiqueFuel"), Some(&1));
-        assert_eq!(backpack_items.len(), 4);
+        assert!(backpack_items.is_empty(), "{backpack_items:?}");
         let chest = sources
             .iter()
             .find(|source| source.label == "PruebaItems001")
@@ -712,6 +843,30 @@ mod tests {
                 .find(|item| item.asset_name == "DA_Food_Nutri-Core")
                 .map(|item| item.quantity),
             Some(9)
+        );
+        assert_eq!(
+            chest
+                .items
+                .iter()
+                .find(|item| item.asset_name == "DA_Food_High-FatEnergy")
+                .map(|item| item.quantity),
+            Some(4)
+        );
+        assert_eq!(
+            chest
+                .items
+                .iter()
+                .find(|item| item.asset_name == "DA_Food_Mind_Surge")
+                .map(|item| item.quantity),
+            Some(5)
+        );
+        assert_eq!(
+            chest
+                .items
+                .iter()
+                .find(|item| item.asset_name == "DA_Food_PhysiqueFuel")
+                .map(|item| item.quantity),
+            Some(4)
         );
     }
 
@@ -758,8 +913,7 @@ mod tests {
 
         assert_eq!(backpack_items.get("DA_Memory_Drawings_Notes"), Some(&1));
         assert_eq!(backpack_items.get("DA_Memory_Drawings_Cards"), Some(&2));
-        assert_eq!(backpack_items.get("DA_Food_High-FatEnergy"), Some(&1));
-        assert_eq!(backpack_items.len(), 15);
+        assert_eq!(backpack_items.len(), 11);
         assert!(!warnings.iter().any(|warning| warning.contains("fallback")));
     }
 }

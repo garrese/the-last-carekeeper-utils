@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.1.4",
+    [string]$Version = "0.1.5",
     [switch]$SkipBuild
 )
 
@@ -77,9 +77,17 @@ Copy-Item -LiteralPath (Join-Path $projectRoot "README.md") -Destination $packag
 
 if ($null -ne $previousDataRoot) {
     foreach ($fileName in $portableDataFiles) {
-        Copy-Item -LiteralPath (Join-Path $previousDataRoot $fileName) -Destination (Join-Path $packageRoot "data\$fileName") -Force
+        $sourceFile = Join-Path $previousDataRoot $fileName
+        $destinationFile = Join-Path $packageRoot "data\$fileName"
+        Copy-Item -LiteralPath $sourceFile -Destination $destinationFile -Force
+
+        $sourceHash = (Get-FileHash -LiteralPath $sourceFile -Algorithm SHA256).Hash
+        $destinationHash = (Get-FileHash -LiteralPath $destinationFile -Algorithm SHA256).Hash
+        if ($sourceHash -ne $destinationHash) {
+            throw "Portable data verification failed after copying $fileName."
+        }
     }
-    Write-Host "Editable data migrated from: $($previousPackage.Directory.FullName)"
+    Write-Host "Editable data migrated and verified from: $($previousPackage.Directory.FullName)"
 }
 
 Write-Host "Portable package created at: $packageRoot"

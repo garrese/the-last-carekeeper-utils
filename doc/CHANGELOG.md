@@ -9,6 +9,11 @@ portable release; their contents are not represented by source-control history.
 
 ## Unreleased
 
+### Fixed
+
+- Bound backpack extraction to its live `Items` property, preventing unrelated
+  character item records from adding one phantom unit to each imported food.
+
 ### Documentation
 
 - Established this changelog as the running record for functionality, safety,

@@ -37,6 +37,12 @@ The backpack is always included. Player boxes are included only when their custo
 
 Unknown asset names remain visible as unresolved diagnostics. Ambiguous aliases are not guessed. Mirrored chest sequences are collapsed only when both ordered halves are exactly identical; a mismatch is preserved and reported.
 
+### Backpack serialization boundary
+
+The current private save fixture's character actor starts at decompressed offset `0x707526`. Its localized `Backpack` descriptor is at `0x70BF70` and is followed by two tagged `ByteData` properties: descriptor data and live backpack state. The live state's `Items` map spans `0x70C4B3..0x70DD42`; it contains no growth resources in this fixture.
+
+A later `ByteData` property starts at `0x70E0EF` and contains a separate `Items` map at `0x70E131`. Four historical food records of quantity one occur there at `0x71D942`, `0x71DBFC`, `0x71DEB2`, and `0x71E168`. They are not backpack ownership. Backpack extraction is therefore bounded to the declared data range of the live-state `Items` property and must never scan from the `Backpack` label to the end of the character actor. The fixture expectation is an empty growth-resource backpack plus chest quantities 4 High-Fat, 5 Mind Surge, 9 Nutri-Core, and 4 Physique Fuel.
+
 The save stores inventory asset references and quantities, not the growth-stat bonuses defined by those assets. Food and memory bonuses therefore come from the editable CSV catalogues. The optional installed-game synchronizer can recover authoritative bonuses, localization keys, and supported icons from packaged DataAssets in a separate read-only operation. Every difference is reviewed before it updates a local CSV or mapping; it never infers aliases from similar technical names.
 
 ## Optimizer boundary

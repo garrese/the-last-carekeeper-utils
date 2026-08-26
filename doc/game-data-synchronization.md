@@ -37,13 +37,17 @@ Changes use these states:
 
 The item availability columns (`TotalAvailability` and `WorldCount`) are not present in the inspected item DataAssets. Sync therefore preserves existing values and leaves them empty for a new entry.
 
-Profession DataAssets contain profession-specific overrides. Shared baseline requirements already present in `Humans.csv` are preserved. The 40 existing professions match the installed assets. `StarChild` is surfaced but blocked because its `StarChild` property is outside the calculator's current stat model and its shared baseline/tier has not been verified.
+Profession DataAssets contain profession-specific overrides. The installed catalogue verifies a shared physical baseline of Weight 20, Height 30, and Life Expectancy 10; an explicit profession value replaces that baseline. Each regular category contains four assets whose strictly increasing total requirements establish T1 through T4. This reconstructs all 40 supported profession rows from an empty `Humans.csv`, and the generated rows match the known catalogue field-for-field. `StarChild` remains blocked because its `StarChild` property is outside the calculator's current stat model.
 
 Some installed foods use memory-style properties, such as Adaptability, which the current Food schema cannot represent. These assets remain visible as unsupported instead of being coerced into the wrong columns.
+
+Header-only Food, Memories, and Humans catalogues are valid so synchronization can bootstrap them from zero rows. Installed assets with the same localized display name and identical values share one catalogue row. If their values differ, the production asset is preferred over an asset stored in a `Notused`, `Unused`, or development folder; the latter is shown as a non-applicable conflict. Multiple incompatible production assets remain conflicts instead of creating duplicate names.
 
 ## Applying changes
 
 Apply reloads the current portable files and verifies that every selected row still equals the value seen during the scan. A stale review is rejected and must be scanned again.
+
+Progress and apply failures remain visible inside the review dialog. The dialog stays open after an error so the selection and diagnostic context are not lost.
 
 All resulting CSV documents and mappings are validated together before any write starts. The existing portable atomic-write path creates timestamped backups before replacing `Food.csv`, `Memories.csv`, `Humans.csv`, or `asset-mappings.json`. The source game files and saves are never targets of this operation.
 

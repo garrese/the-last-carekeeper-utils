@@ -26,17 +26,17 @@ Keep the entire folder together. The application creates missing `data`, `config
 
 ## Development
 
-Requirements: Node.js 20+, pnpm, Rust stable, and the Windows prerequisites for Tauri 2.
+Requirements: Node.js 20+ with Corepack, Rust stable, and the Windows prerequisites for Tauri 2.
 
 ```powershell
-pnpm install
-pnpm tauri dev
+corepack pnpm install
+corepack pnpm tauri dev
 ```
 
 Run the checks with:
 
 ```powershell
-pnpm build
+corepack pnpm build
 cargo test --manifest-path src-tauri\Cargo.toml
 ```
 

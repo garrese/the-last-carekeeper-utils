@@ -464,7 +464,7 @@ export default function App() {
           </div>
         </header>
 
-        {(busy || error || notice) && (
+        {!syncProposal && (busy || error || notice) && (
           <div className={`message-bar ${error ? 'error' : notice ? 'success' : ''}`}>
             {busy ? <LoaderCircle className="spin" size={17} /> : error ? <CircleAlert size={17} /> : <Check size={17} />}
             <span>{busy || error || notice}</span>
@@ -653,6 +653,11 @@ export default function App() {
                 <span><strong>{syncProposal.source.packageCount}</strong> installed packages indexed</span>
                 <button className="button ghost" onClick={() => syncFromGame(true)}><FolderOpen size={15} /> Change game folder</button>
               </div>
+              {(busy || error) && <div className={`sync-feedback ${error ? 'error' : ''}`}>
+                {busy ? <LoaderCircle className="spin" size={17} /> : <CircleAlert size={17} />}
+                <span>{busy || error}</span>
+                {error && <button onClick={() => setError('')}>Dismiss</button>}
+              </div>}
               {!!syncProposal.source.warnings.length && <div className="sync-warnings"><CircleAlert size={17} /><div><strong>{syncProposal.source.warnings.length} extraction warnings</strong>{syncProposal.source.warnings.slice(0, 3).map((warning) => <span key={warning}>{warning}</span>)}</div></div>}
               <div className="sync-section-tabs">
                 {syncProposal.sections.map((section) => <button className={syncSection === section.kind ? 'active' : ''} key={section.kind} onClick={() => setSyncSection(section.kind)}><span>{section.kind}</span><strong>{section.changes.length}</strong></button>)}
